@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "embedded-ai-coder"
+version = "0.1.0"
+description = "STM32 编码自动化桌面工具:采集 debug 日志/HardFault,回喂 AI 自动编写 C 代码"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "GPL-3.0-only" }
+authors = [{ name = "EmbeddedAiCoder Contributors" }]
+keywords = ["STM32", "embedded", "AI", "automation", "Fluent", "PySide6"]
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Embedded Systems",
+    "Environment :: X11 Applications :: Qt",
+]
+
+dependencies = [
+    "PySide6>=6.5",
+    "PySide6-Fluent-Widgets>=1.5",
+    "pyserial>=3.5",
+    "pyocd>=0.36",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.4", "pytest>=8.0"]
+
+[project.scripts]
+embedded-ai-coder = "embedded_ai_coder.app:main"
+
+[tool.setuptools]
+packages = [
+    "embedded_ai_coder",
+    "embedded_ai_coder.core",
+    "embedded_ai_coder.gui",
+    "embedded_ai_coder.gui.pages",
+]

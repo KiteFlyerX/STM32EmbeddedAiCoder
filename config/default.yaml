@@ -1,0 +1,39 @@
+# EmbeddedAiCoder 默认配置
+# 个人配置请在 config/local.yaml 覆盖(local.yaml 不入库,可放密钥)
+# 带 (待填) 的字段对应需求文档第十一节开放问题,先占位、后补
+
+project:
+  root: ""              # (待填 S-01) STM32 工程根目录,如 E:/work/my_stm32
+  chip: ""              # (待填 S-01) 如 STM32H743 / STM32F407
+  build_command: ""     # (待填 S-02) 如 make ; 或 cmake --build build
+
+collector:
+  channel: uart         # (待填 S-03) uart | rtt
+  serial:
+    port: "COM3"        # Windows; Linux: /dev/ttyUSB0 ; macOS: /dev/cu.usbserial-*
+    baudrate: 115200
+
+debugger:
+  probe: stlink         # (待填 S-04) stlink | jlink | cmsis-dap
+
+flasher:
+  backend: pyocd        # pyocd | stm32cubeprogrammer | openocd
+  firmware: ""          # .elf/.bin/.hex 路径
+
+build:
+  toolchain: arm-gcc    # arm-gcc | cubeide
+
+ai:
+  provider: ""          # (待填 G-02) claude | openai | local
+  model: ""
+  api_key: ""           # 建议放 config/local.yaml 或环境变量,勿提交
+  base_url: ""
+
+loop:
+  max_iterations: 10    # 最大自动迭代轮数
+  timeout_sec: 600
+  auto_flash: false     # 自动烧录开关(默认关闭,需人工确认)
+
+ui:
+  theme: auto           # auto | light | dark
+  language: zh          # zh | en
