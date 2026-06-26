@@ -125,7 +125,7 @@ STM32 日常开发中存在一个高耗时、低创造性的反馈循环:
 | P0 | F-04 | C 代码回写 | 按文件/函数/行安全替换,保留备份 |
 | P0 | F-05 | pyOCD 自动烧录 | 烧录 .elf/.bin/.hex,自动复位,断线重连 |
 | P0 | F-06 | 最小闭环 | 采集→AI→回写→烧录→复采,可配最大轮数 |
-| P1 | F-07 | 源码上下文检索 | 基于独立项目 **AIDB**(同级 `../AIDB`)的 Atom/Lens 检索,token 预算内精准喂上下文 |
+| P1 | F-07 | 源码上下文检索 | 基于独立项目 **STM32_TokenBase**(同级 `../STM32_TokenBase`)的 Atom/Lens 检索,token 预算内精准喂上下文 |
 | P1 | F-08 | 自动构建 + 编译自愈 | arm-gcc/Make/CMake;编译错误回喂 AI |
 | P1 | F-09 | HardFault 解析 | 解码 fault 寄存器 + 栈回溯 + addr2line |
 | P1 | F-10 | RTT / SWO 实时日志 | 经 SWD 高速采集,补充 UART |
