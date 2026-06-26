@@ -16,6 +16,7 @@ Copyright (c) KiteFlyerX
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -71,6 +72,7 @@ class OrchestratorImpl(Orchestrator):
         confirm_fn: Optional[Callable[[str], bool]] = None,
         collect_lines_per_iter: int = 200,
         on_step: Optional[Callable[[str, dict], None]] = None,
+        pause_event: Optional[threading.Event] = None,
     ):
         self.collector = collector
         self.log_filter = log_filter
@@ -86,6 +88,8 @@ class OrchestratorImpl(Orchestrator):
         self.collect_lines_per_iter = collect_lines_per_iter
         # on_step(stage, payload):每步回调,CLI 打印 / GUI 上报都用它
         self.on_step = on_step or (lambda stage, payload: None)
+        # pause_event:set=运行,clear=暂停(GUI 用);None(CLI)=永不暂停
+        self._pause_event = pause_event
         self._stop = False
 
     # ---------- 主入口 ----------
@@ -102,6 +106,17 @@ class OrchestratorImpl(Orchestrator):
             if self._stop:
                 self._emit("stop", {"reason": "用户停止", "iteration": i})
                 break
+            # 暂停(GUI):在迭代之间阻塞,但仍以 0.25s 粒度响应 stop
+            if self._pause_event is not None and not self._pause_event.is_set():
+                self._emit("paused", {"iteration": i})
+                while not self._pause_event.is_set():
+                    if self._stop:
+                        break
+                    self._pause_event.wait(timeout=0.25)
+                if self._stop:
+                    self._emit("stop", {"reason": "用户停止(暂停中)", "iteration": i})
+                    break
+                self._emit("resumed", {"iteration": i})
             if time.monotonic() - start > self.timeout_sec:
                 self._emit("stop", {"reason": "超时", "iteration": i})
                 break
@@ -252,6 +267,8 @@ def make_orchestrator(config: dict, *, dry_run: bool = False,
                       log_file: Optional[str | Path] = None,
                       on_step: Optional[Callable[[str, dict], None]] = None,
                       confirm_fn: Optional[Callable[[str], bool]] = None,
+                      on_line: Optional[Callable[[str], None]] = None,
+                      pause_event: Optional[threading.Event] = None,
                       ) -> OrchestratorImpl:
     """工厂:用一组 *_make_* 工厂 + config 组装 Orchestrator。"""
     from .ai_client import make_ai_client
@@ -264,7 +281,7 @@ def make_orchestrator(config: dict, *, dry_run: bool = False,
     project = config.get("project", {}) or {}
     root = project.get("root", ".")
 
-    collector = make_collector(config)
+    collector = make_collector(config, on_line=on_line)
     if log_file:
         collector.enable_log_to_file(log_file)
     log_filter = make_filter(config)
@@ -282,4 +299,5 @@ def make_orchestrator(config: dict, *, dry_run: bool = False,
         timeout_sec=float(loop.get("timeout_sec", 600.0)),
         auto_flash=bool(loop.get("auto_flash", False)),
         confirm_fn=confirm_fn, on_step=on_step,
+        pause_event=pause_event,
     )

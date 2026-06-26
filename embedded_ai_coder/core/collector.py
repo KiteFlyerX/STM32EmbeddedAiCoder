@@ -14,7 +14,7 @@ import queue
 import threading
 import time
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional
 
 from .interfaces import LogCollector
 
@@ -39,11 +39,15 @@ class SerialCollector(LogCollector):
         *,
         reconnect_interval: float = 2.0,
         from_file: Optional[str | Path] = None,
+        on_line: Optional[Callable[[str], None]] = None,
     ):
         self.port = port
         self.baudrate = baudrate
         self.reconnect_interval = reconnect_interval
         self.from_file = Path(from_file) if from_file else None
+
+        # 每行产出时同步回调(GUI 用来做实时日志流式展示);回调异常被吞,不影响采集
+        self.on_line = on_line
 
         self._queue: "queue.Queue[Optional[str]]" = queue.Queue()
         self._stop_event = threading.Event()
@@ -150,8 +154,13 @@ class SerialCollector(LogCollector):
             return None
 
     def _emit(self, line: str) -> None:
-        """产出一行:推队列 + 可选落盘。"""
+        """产出一行:推队列 + 可选落盘 + 可选 on_line 回调。"""
         self._queue.put(line)
+        if self.on_line is not None:
+            try:
+                self.on_line(line)
+            except Exception:
+                pass
         if self._log_path is not None:
             try:
                 with self._log_path.open("a", encoding="utf-8") as f:
@@ -196,10 +205,10 @@ class SerialCollector(LogCollector):
         self._log_path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def make_collector(config: dict) -> SerialCollector:
-    """根据 config 构造采集器。"""
+def make_collector(config: dict, on_line: Optional[Callable[[str], None]] = None) -> SerialCollector:
+    """根据 config 构造采集器。on_line 用于 GUI 实时日志流(CLI 不传)。"""
     collector_cfg = config.get("collector", {}) or {}
     serial_cfg = collector_cfg.get("serial", {}) or {}
     port = serial_cfg.get("port", "COM3")
     baudrate = int(serial_cfg.get("baudrate", 115200))
-    return SerialCollector(port=port, baudrate=baudrate)
+    return SerialCollector(port=port, baudrate=baudrate, on_line=on_line)
