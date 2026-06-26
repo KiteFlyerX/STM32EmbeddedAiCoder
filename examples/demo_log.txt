@@ -1,0 +1,13 @@
+[0000.012] UART init: baud=115200
+[0000.045] sensor_init: buffer cleared
+[0000.046] sensor_samples_read: count=10 buf_size=8
+[0000.047] *** HARD FAULT ***
+[0000.047] fault: CFSR=0x00008200 (PRECISERR | IMPRECISERR)
+[0000.047] fault: MMFAR=0x00000000 BFAR=0x00000000
+[0000.047] panic: memory access violation in sensor_samples_read
+[0000.047] stack:
+[0000.047]   #0 0x080004A0  sensor_samples_read + 48   (demo_sensor.c:23)
+[0000.047]   #1 0x08000510  app_run + 36               (main.c:30)
+[0000.047]   #2 0x08000548  main + 12                  (main.c:44)
+[0000.047] assert: src != NULL (in sensor_samples_read)
+[0000.048] system halted.

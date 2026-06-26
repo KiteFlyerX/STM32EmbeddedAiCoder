@@ -9,8 +9,12 @@ PySide6-Fluent-Widgets>=1.5
 pyserial>=3.5
 pyocd>=0.36
 
-# AI API 调用(M1 占位)
+# AI API 调用(M1:OpenAI 兼容 HTTP)
 httpx>=0.27
+
+# 源码定位(按函数名回写补丁;tree-sitter-c 用于精确函数体边界)
+tree-sitter>=0.23
+tree-sitter-c>=0.23
 
 # 配置
 pyyaml>=6.0

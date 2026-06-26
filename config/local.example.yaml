@@ -1,0 +1,42 @@
+# EmbeddedAiCoder 个人配置示例
+# 复制为 local.yaml 并填入真实值;local.yaml 不入库,可放密钥。
+# 与 config/default.yaml 深度合并,这里只写覆盖项。
+
+project:
+  root: "E:/AiTool/EmbeddedAiCoder/examples/demo_project"   # STM32 工程根
+  chip: "STM32G0B1"                                          # 目标芯片(part number)
+  build_command: ""                                          # 如 make;留空则跳过构建(M1 可选)
+
+collector:
+  channel: uart
+  serial:
+    port: "COM3"
+    baudrate: 115200
+
+debugger:
+  probe: stlink
+
+flasher:
+  backend: pyocd
+  firmware: ""                                               # .elf/.bin/.hex 路径;dry-run 可留空
+
+# AI 配置 —— 决定 mock 还是真调
+# 不填 api_key 即自动进入 mock 模式(返回预制 patch,可端到端演示)。
+# 填了 key 则走 OpenAI 兼容 HTTP(base_url 切 provider):
+ai:
+  provider: "openai"          # claude | openai | local
+  model: "gpt-4o-mini"
+  api_key: ""                 # 例:sk-...;或 Claude 经 openai 兼容代理
+  base_url: "https://api.openai.com/v1"
+  # 本地模型(ollama)示例:
+  # provider: "local"
+  # model: "qwen2.5-coder:7b"
+  # base_url: "http://localhost:11434/v1"
+  # api_key: "ollama"        # ollama 任意非空即可
+  tokenbase_dir: "E:/AiTool/EmbeddedAiCoder/examples/demo_project"  # tokenbase query 的工程目录
+  max_symbols: 8
+
+loop:
+  max_iterations: 10
+  timeout_sec: 600
+  auto_flash: false          # 烧录前人工确认;true 则自动烧录

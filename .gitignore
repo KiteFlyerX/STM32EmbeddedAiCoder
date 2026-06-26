@@ -24,6 +24,9 @@ Thumbs.db
 # 项目运行产物
 *.log
 logs/
+# 回写备份 / tokenbase 生成的索引库
+*.bak
+.tokenbase/
 
 # 本地配置(含密钥,不入库)
 config/local.yaml
