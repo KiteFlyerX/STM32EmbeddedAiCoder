@@ -19,9 +19,10 @@ from qfluentwidgets import (
 
 
 class SettingsPage(QWidget):
-    def __init__(self, config: dict[str, Any], parent=None):
+    def __init__(self, hub, parent=None):
         super().__init__(parent)
-        self.config = config
+        self.hub = hub
+        self.config = hub.config
         self.setObjectName("SettingsPage")
 
         root = QVBoxLayout(self)

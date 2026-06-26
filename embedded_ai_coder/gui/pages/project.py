@@ -6,7 +6,8 @@ from .base import PlaceholderPage
 
 
 class ProjectPage(PlaceholderPage):
-    def __init__(self, parent=None):
+    def __init__(self, hub, parent=None):
+        self.hub = hub
         super().__init__(
             "工程",
             "配置与浏览 STM32 工程:根目录、芯片型号、构建方式、源码树,供 AI 提取上下文。",

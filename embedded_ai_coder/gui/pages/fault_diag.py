@@ -6,7 +6,8 @@ from .base import PlaceholderPage
 
 
 class FaultDiagPage(PlaceholderPage):
-    def __init__(self, parent=None):
+    def __init__(self, hub, parent=None):
+        self.hub = hub
         super().__init__(
             "故障诊断",
             "自动解码 HardFault(fault 寄存器 + 栈回溯),用 addr2line 映射到源码行,辅助 AI 定位根因。",

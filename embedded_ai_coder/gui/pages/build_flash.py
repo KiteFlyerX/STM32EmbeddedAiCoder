@@ -6,7 +6,8 @@ from .base import PlaceholderPage
 
 
 class BuildFlashPage(PlaceholderPage):
-    def __init__(self, parent=None):
+    def __init__(self, hub, parent=None):
+        self.hub = hub
         super().__init__(
             "构建烧录",
             "调用 arm-none-eabi-gcc 构建固件(编译错误可回喂 AI 自愈),经 pyOCD 等后端烧录并复位。",

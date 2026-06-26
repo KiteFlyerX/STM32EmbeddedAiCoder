@@ -6,7 +6,8 @@ from .base import PlaceholderPage
 
 
 class LogMonitorPage(PlaceholderPage):
-    def __init__(self, parent=None):
+    def __init__(self, hub, parent=None):
+        self.hub = hub
         super().__init__(
             "日志监控",
             "实时展示串口 / RTT 日志;error / fault / assert 自动高亮,支持关键字搜索与通道切换。",
