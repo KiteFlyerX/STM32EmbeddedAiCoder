@@ -43,6 +43,7 @@ def _serialize(res: IterationResult) -> dict[str, Any]:
         "fault_fragment": res.fault_fragment,
         "symbols": list(res.symbols),
         "tokenbase_echo": list(res.tokenbase_echo),
+        "docs_echo": list(res.docs_echo),
         "diagnosis": res.diagnosis,
         "patches": list(res.patches),
         "patches_applied": res.patches_applied,

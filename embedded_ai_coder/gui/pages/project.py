@@ -19,9 +19,11 @@ from PySide6.QtWidgets import (
 
 from qfluentwidgets import (
     BodyLabel,
+    CaptionLabel,
     ElevatedCardWidget,
     InfoBar,
     LineEdit,
+    PlainTextEdit,
     PrimaryPushButton,
     PushButton,
     StrongBodyLabel,
@@ -87,6 +89,8 @@ class ProjectPage(PlaceholderPage):
         cl.addLayout(saveRow)
         layout.addWidget(cfgCard)
 
+        layout.addWidget(self._build_docs_card(cfg))
+
         treeCard = ElevatedCardWidget(self)
         tl = QVBoxLayout(treeCard)
         tl.setContentsMargins(16, 12, 16, 16)
@@ -103,6 +107,137 @@ class ProjectPage(PlaceholderPage):
         # 初次填充源码树
         self._refresh_tree()
 
+    # ---------- 项目文档卡片(F-24 预读)----------
+    def _build_docs_card(self, cfg) -> ElevatedCardWidget:
+        """原理图 / 需求文档:选择 → 预读预览 → 保存到 local.yaml。"""
+        docs_cfg = cfg.get("docs", {}) or {}
+        self._sch_paths: list[str] = list(docs_cfg.get("schematics") or [])
+        self._req_paths: list[str] = list(docs_cfg.get("requirements") or [])
+
+        card = ElevatedCardWidget(self)
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(16, 12, 16, 16)
+        cl.setSpacing(8)
+        cl.addWidget(SubtitleLabel("项目文档(预读注入 AI 上下文)", card))
+        cl.addWidget(CaptionLabel(
+            "原理图走多模态视觉(图片 png/jpg 直传;pdf 需可选 pymupdf);"
+            "需求文档纯标准库抽取(md/txt/docx;pdf 仅记元信息)。", card))
+
+        # 原理图
+        cl.addWidget(BodyLabel("原理图(可多选,图片/PDF):", card))
+        schRow = QHBoxLayout()
+        self.schEdit = LineEdit(card)
+        self.schEdit.setReadOnly(True)
+        self.schEdit.setPlaceholderText("点击「添加…」选择原理图文件")
+        self._refresh_path_edit(self.schEdit, self._sch_paths)
+        self.btnAddSch = PushButton("添加…", card)
+        self.btnClrSch = PushButton("清空", card)
+        schRow.addWidget(self.schEdit, 1)
+        schRow.addWidget(self.btnAddSch)
+        schRow.addWidget(self.btnClrSch)
+        cl.addLayout(schRow)
+
+        # 需求文档
+        cl.addWidget(BodyLabel("需求文档(可多选,md/txt/docx/pdf):", card))
+        reqRow = QHBoxLayout()
+        self.reqEdit = LineEdit(card)
+        self.reqEdit.setReadOnly(True)
+        self.reqEdit.setPlaceholderText("点击「添加…」选择需求文档")
+        self._refresh_path_edit(self.reqEdit, self._req_paths)
+        self.btnAddReq = PushButton("添加…", card)
+        self.btnClrReq = PushButton("清空", card)
+        reqRow.addWidget(self.reqEdit, 1)
+        reqRow.addWidget(self.btnAddReq)
+        reqRow.addWidget(self.btnClrReq)
+        cl.addLayout(reqRow)
+
+        # 预读 + 预览
+        opRow = QHBoxLayout()
+        self.btnPreread = PushButton("📖 预读文档", card)
+        opRow.addWidget(self.btnPreread)
+        opRow.addStretch(1)
+        cl.addLayout(opRow)
+        self.previewEdit = PlainTextEdit(card)
+        self.previewEdit.setReadOnly(True)
+        self.previewEdit.setPlaceholderText("「预读文档」后在此查看抽取结果摘要。")
+        self.previewEdit.setFixedHeight(150)
+        cl.addWidget(self.previewEdit)
+
+        # 绑定
+        self.btnAddSch.clicked.connect(lambda: self._add_files("schematic"))
+        self.btnClrSch.clicked.connect(lambda: self._clear_files("schematic"))
+        self.btnAddReq.clicked.connect(lambda: self._add_files("requirement"))
+        self.btnClrReq.clicked.connect(lambda: self._clear_files("requirement"))
+        self.btnPreread.clicked.connect(self._on_preread)
+        return card
+
+    @staticmethod
+    def _refresh_path_edit(edit: LineEdit, paths: list[str]) -> None:
+        edit.setText(", ".join(p.replace("\\", "/") for p in paths))
+
+    def _add_files(self, kind: str) -> None:
+        if kind == "schematic":
+            flt = "原理图 (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.pdf);;所有文件 (*)"
+            paths, _ = QFileDialog.getOpenFileNames(self, "选择原理图", "", flt)
+            target = self._sch_paths
+        else:
+            flt = ("需求文档 (*.md *.txt *.rst *.docx *.pdf *.c *.h *.json *.yaml *.csv);;"
+                   "所有文件 (*)")
+            paths, _ = QFileDialog.getOpenFileNames(self, "选择需求文档", "", flt)
+            target = self._req_paths
+        for p in paths:
+            p = p.replace("\\", "/")
+            if p and p not in target:
+                target.append(p)
+        edit = self.schEdit if kind == "schematic" else self.reqEdit
+        self._refresh_path_edit(edit, target)
+
+    def _clear_files(self, kind: str) -> None:
+        if kind == "schematic":
+            self._sch_paths.clear()
+            self._refresh_path_edit(self.schEdit, self._sch_paths)
+        else:
+            self._req_paths.clear()
+            self._refresh_path_edit(self.reqEdit, self._req_paths)
+
+    def _on_preread(self) -> None:
+        """在 GUI 线程直接预读(本地文件,快),展示抽取摘要。"""
+        from ...core.docs_context import DocsContextReader, make_docs_config
+
+        base = dict(self.hub.config.get("docs", {}) or {})
+        base["schematics"] = list(self._sch_paths)
+        base["requirements"] = list(self._req_paths)
+        reader = DocsContextReader(make_docs_config({"docs": base}))
+        try:
+            items, echo = reader.read_all()
+        except Exception as exc:  # noqa: BLE001
+            InfoBar.error("预读失败", str(exc), parent=self.window(), duration=4000)
+            return
+        n_img = len(reader.render_images(items))
+        n_text = sum(1 for it in items if it.role == "text")
+        preview_lines = [
+            f"预读完成:{len(items)} 份(文本 {n_text} / 图片 {n_img})。",
+            "",
+        ]
+        for it in items:
+            name = Path(it.path).name
+            tag = {"text": "文本", "image": "图片", "meta_only": "元信息"}[it.role]
+            line = f"[{it.kind}] {name}  →  {tag}"
+            if it.text:
+                line += f"  ({len(it.text)}字符)"
+            if it.note:
+                line += f"  备注:{it.note}"
+            preview_lines.append(line)
+            # 文本类附前几行预览
+            if it.role == "text" and it.text:
+                snippet = it.text.strip().splitlines()[:3]
+                for s in snippet:
+                    preview_lines.append("    " + s[:120])
+        self.previewEdit.setPlainText("\n".join(preview_lines))
+        InfoBar.success("预读完成",
+                        f"{len(items)} 份文档(图片 {n_img});保存后将在闭环中注入 AI 上下文。",
+                        parent=self.window(), duration=3500)
+
     # ---------- 动作 ----------
     def _on_browse(self) -> None:
         start = self.rootEdit.text().strip() or ""
@@ -118,6 +253,10 @@ class ProjectPage(PlaceholderPage):
         overlay = {
             "project": {"root": root, "chip": chip, "build_command": build_cmd},
             "ai": {"tokenbase_dir": root} if root else {},
+            "docs": {
+                "schematics": list(self._sch_paths),
+                "requirements": list(self._req_paths),
+            },
         }
         try:
             save_local_overlay(overlay)
@@ -130,7 +269,12 @@ class ProjectPage(PlaceholderPage):
         self.hub.config["project"] = merged_proj
         if root:
             self.hub.config.setdefault("ai", {})["tokenbase_dir"] = root
-        InfoBar.success("已保存", "工程配置已写入 local.yaml。", parent=self.window(), duration=3000)
+        merged_docs = dict(self.hub.config.get("docs", {}) or {})
+        merged_docs["schematics"] = list(self._sch_paths)
+        merged_docs["requirements"] = list(self._req_paths)
+        self.hub.config["docs"] = merged_docs
+        InfoBar.success("已保存", "工程配置与项目文档已写入 local.yaml。",
+                        parent=self.window(), duration=3000)
         self._refresh_tree()
 
     def _refresh_tree(self) -> None:

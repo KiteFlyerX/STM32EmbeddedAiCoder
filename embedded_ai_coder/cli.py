@@ -61,6 +61,11 @@ def _make_step_printer():
                 print(f"           tokenbase 抽取符号:{syms}")
             for echo in payload.get("tokenbase_echo", []):
                 print(f"             $ {echo}")
+            docs_echo = payload.get("docs_echo", [])
+            if docs_echo:
+                print("           预读文档:")
+                for echo in docs_echo:
+                    print(f"             · {echo}")
         elif stage == "coded":
             print(f"[4/7 回写]   应用 {payload.get('applied', 0)} 处,"
                   f"失败 {payload.get('failed', 0)} 处;"

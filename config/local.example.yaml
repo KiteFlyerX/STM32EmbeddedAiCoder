@@ -40,3 +40,14 @@ loop:
   max_iterations: 10
   timeout_sec: 600
   auto_flash: false          # 烧录前人工确认;true 则自动烧录
+
+# 项目文档预读(F-24):让 AI 带着原理图/需求背景改码
+# 原理图支持多模态视觉(图片 png/jpg 直传;pdf 需可选 pymupdf);需求文档纯标准库抽取
+docs:
+  schematics:
+    # - "E:/work/my_stm32/docs/board_schematic.png"   # 原理图图片(推荐)
+  requirements:
+    # - "E:/work/my_stm32/docs/firmware_spec.md"       # md/txt/docx(pdf 仅记元信息)
+  vision: true                # 原理图走多模态视觉(纯文本模型请置 false)
+  max_images: 4
+  max_image_mb: 5

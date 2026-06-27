@@ -44,6 +44,7 @@ class IterationResult:
     fault_fragment: str = ""
     symbols: list[str] = field(default_factory=list)
     tokenbase_echo: list[str] = field(default_factory=list)
+    docs_echo: list[str] = field(default_factory=list)
     diagnosis: str = ""
     patches: list[dict] = field(default_factory=list)
     patches_applied: int = 0
@@ -179,9 +180,11 @@ class OrchestratorImpl(Orchestrator):
         meta = ai_out.get("meta", {})
         res.symbols = meta.get("tokenbase_symbols", [])
         res.tokenbase_echo = meta.get("tokenbase_echo", [])
+        res.docs_echo = meta.get("docs_echo", [])
         self._emit("ai_done", {
             "diagnosis": res.diagnosis, "patches": len(res.patches),
             "symbols": res.symbols, "tokenbase_echo": res.tokenbase_echo,
+            "docs_echo": res.docs_echo,
             "mock": meta.get("mock", False),
         })
 

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import tokenbase_bridge
+from .docs_context import DocsConfig, DocsContextReader, make_docs_config
 from .interfaces import AiClient
 
 logger = logging.getLogger(__name__)
@@ -32,8 +33,9 @@ logger = logging.getLogger(__name__)
 # 系统提示词:告诉模型它是嵌入式代码医生,且必须返回严格 JSON
 SYSTEM_PROMPT = (
     "你是一名资深 STM32 嵌入式 C 工程师与故障诊断专家。"
-    "用户会给你一段串口日志(含 fault/崩溃)+ 来自代码数据库的符号签名上下文。"
-    "请定位根因,并给出最小化的 C 代码补丁。\n\n"
+    "用户会给你一段串口日志(含 fault/崩溃)、来自代码数据库的符号签名上下文,"
+    "以及可能的【项目文档预读】——包括需求文档正文与原理图(原理图以图片形式随消息附送)。"
+    "请结合原理图的引脚/外设/网络连接与需求文档的产品定义定位根因,并给出最小化的 C 代码补丁。\n\n"
     "输出要求:\n"
     "- 必须返回严格 JSON,不要 markdown 包裹,不要解释性前言。\n"
     "- schema:\n"
@@ -56,6 +58,7 @@ class AiConfig:
     dry_run: bool = False          # 强制 mock(无 key 或 --dry-run)
     tokenbase_dir: str = ""        # 工程目录(用于 tokenbase query)
     max_symbols: int = 8           # 单轮最多 query 的符号数(控 token)
+    docs: Optional[DocsConfig] = None   # 项目文档预读配置(原理图/需求文档)
 
 
 def make_ai_config(config: dict) -> AiConfig:
@@ -69,14 +72,19 @@ def make_ai_config(config: dict) -> AiConfig:
         base_url=ai.get("base_url", ""),
         tokenbase_dir=ai.get("tokenbase_dir", project_root),
         max_symbols=int(ai.get("max_symbols", 8)),
+        docs=make_docs_config(config),
     )
 
 
 class AiClientImpl(AiClient):
     """AiClient 实现:tokenbase 上下文 + OpenAI 兼容 HTTP + mock。"""
 
-    def __init__(self, cfg: AiConfig):
+    def __init__(self, cfg: AiConfig, docs_reader: Optional[DocsContextReader] = None):
         self.cfg = cfg
+        # 预读器:读一次缓存复用;无 docs 配置则不预读
+        self._docs = docs_reader or (
+            DocsContextReader(cfg.docs) if cfg.docs is not None else None
+        )
         self._http = None  # lazy
 
     # ---------- 对外主入口 ----------
@@ -94,16 +102,31 @@ class AiClientImpl(AiClient):
         symbols = self._extract_symbols(log_context)
         lens_block, query_echo = self._gather_tokenbase(symbols)
 
+        # 1b) 预读项目文档(原理图/需求文档):读一次缓存复用
+        docs_text, docs_images, docs_echo = self._gather_docs()
+
         # 2) 决定 mock 还是真调
         if self._should_mock():
             result = self._mock_result(log_context, lens_block)
         else:
-            result = self._call_model(log_context, lens_block, source_context, goal)
+            result = self._call_model(log_context, lens_block, source_context, goal,
+                                      docs_text, docs_images)
 
         result.setdefault("meta", {})
         result["meta"]["tokenbase_symbols"] = symbols
         result["meta"]["tokenbase_echo"] = query_echo
+        result["meta"]["docs_echo"] = docs_echo
         return result
+
+    # ---------- 文档预读接入 ----------
+    def _gather_docs(self) -> tuple[str, list[str], list[str]]:
+        """预读原理图/需求文档。返回 (prompt 文本块, 图片 data_url 列表, 回显行)。"""
+        if self._docs is None:
+            return "", [], []
+        items, echo = self._docs.read_all()
+        text_block = self._docs.render_text_block(items)
+        images = self._docs.render_images(items)
+        return text_block, images, echo
 
     # ---------- tokenbase 接入 ----------
     def _extract_symbols(self, log_context: str) -> list[str]:
@@ -142,18 +165,30 @@ class AiClientImpl(AiClient):
         return False
 
     def _call_model(self, log_context: str, lens_block: str,
-                    source_context: str, goal: str) -> dict:
-        """调 OpenAI 兼容 API。"""
+                    source_context: str, goal: str,
+                    docs_text: str = "", docs_images: list[str] | None = None) -> dict:
+        """调 OpenAI 兼容 API。有原理图图片时走多模态(content 列表含 image_url)。"""
         import httpx  # lazy
 
-        user_msg = self._build_user_prompt(log_context, lens_block, source_context, goal)
+        docs_images = docs_images or []
+        user_msg = self._build_user_prompt(log_context, lens_block, source_context, goal,
+                                           docs_text)
         base = (self.cfg.base_url or "https://api.openai.com/v1").rstrip("/")
         url = f"{base}/chat/completions"
+        # 多模态:有图片 + 配置开启 vision 时,user content 用 [text, image_url...] 列表;
+        # 否则保持纯字符串(兼容纯文本模型)。
+        if docs_images and self.cfg.docs and self.cfg.docs.vision:
+            user_content: object = [{"type": "text", "text": user_msg}]
+            for data_url in docs_images:
+                user_content.append(
+                    {"type": "image_url", "image_url": {"url": data_url}})
+        else:
+            user_content = user_msg
         payload = {
             "model": self.cfg.model or "gpt-4o-mini",
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_msg},
+                {"role": "user", "content": user_content},
             ],
             "temperature": 0.2,
             "response_format": {"type": "json_object"},
@@ -174,7 +209,8 @@ class AiClientImpl(AiClient):
                                      error=f"模型调用失败:{exc}")
 
     def _build_user_prompt(self, log_context: str, lens_block: str,
-                           source_context: str, goal: str) -> str:
+                           source_context: str, goal: str,
+                           docs_text: str = "") -> str:
         parts: list[str] = []
         if goal:
             parts.append(f"# 用户目标\n{goal}")
@@ -184,6 +220,9 @@ class AiClientImpl(AiClient):
         parts.append("```")
         parts.append("")
         parts.append(lens_block)
+        if docs_text.strip():
+            parts.append("")
+            parts.append(docs_text)
         if source_context.strip():
             parts.append("\n# 额外源码片段(可选)")
             parts.append("```c")

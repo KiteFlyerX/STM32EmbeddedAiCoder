@@ -34,6 +34,16 @@ loop:
   timeout_sec: 600
   auto_flash: false     # 自动烧录开关(默认关闭,需人工确认)
 
+# 项目文档预读(F-24):闭环启动时把原理图/需求文档读一次、缓存复用,注入 AI 上下文
+docs:
+  schematics: []        # 原理图路径(图片 png/jpg 优先;pdf 视觉需可选 pymupdf)
+  requirements: []      # 需求文档(md/txt/docx;pdf 仅记录元信息)
+  vision: true          # 原理图走多模态视觉(需模型支持 image_url;纯文本模型请置 false)
+  max_images: 4         # 单轮最多随附原理图图片数(控成本)
+  max_image_mb: 5       # 单张图片大小上限(MB),超过跳过
+  max_chars_per_doc: 8000   # 单文档字符上限
+  max_chars_total: 16000    # 所有文档合计字符上限
+
 ui:
   theme: auto           # auto | light | dark
   language: zh          # zh | en
