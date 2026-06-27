@@ -35,3 +35,23 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
         else:
             out[key] = value
     return out
+
+
+def save_local_overlay(overlay: dict[str, Any]) -> dict[str, Any]:
+    """把 overlay 深合并写入 config/local.yaml(不存在则创建),返回合并后的完整 local 配置。
+
+    供设置页 / 工程页持久化用户改动;密钥等敏感字段只落 local.yaml(已 gitignore)。
+    返回值便于调用方刷新内存中的 config。
+    """
+    existing: dict[str, Any] = {}
+    if LOCAL_CONFIG.exists():
+        try:
+            with LOCAL_CONFIG.open("r", encoding="utf-8") as f:
+                existing = yaml.safe_load(f) or {}
+        except Exception:
+            existing = {}
+    merged = _deep_merge(existing, overlay)
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with LOCAL_CONFIG.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(merged, f, allow_unicode=True, sort_keys=False)
+    return merged
