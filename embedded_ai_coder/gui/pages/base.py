@@ -32,8 +32,8 @@ class PlaceholderPage(QWidget):
 
         self.contentLayout = QVBoxLayout()
         self._build_content(self.contentLayout)
-        self.vbox.addLayout(self.contentLayout)
-        self.vbox.addStretch(1)
+        # 内容区 stretch=1:随窗口变大填满页面(日志视图/源码树/diff 等会跟着撑开)
+        self.vbox.addLayout(self.contentLayout, 1)
 
     def _build_content(self, layout: QVBoxLayout) -> None:
         """默认占位卡片;子类可覆写以自定义内容区。"""
