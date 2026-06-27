@@ -166,11 +166,13 @@ class AiCoderPage(PlaceholderPage):
         written = payload.get("written", 0)
         skipped = payload.get("skipped", 0)
         summary = payload.get("summary", "") or "(无摘要)"
+        tb_hits = payload.get("tb_hits", 0)
         tag = " [mock]" if mock else ""
+        tb_note = f"<br>　🔁 已复用工程 {tb_hits} 个已有签名(TokenBase)" if tb_hits else ""
         file_lines = "".join(f"<br>　· {f.get('path')} ({f.get('chars', 0)} 字符) {f.get('reason', '')}"
                              for f in files)
         self.implLabel.setText(
-            f"{tag}摘要:{summary}<br>"
+            f"{tag}摘要:{summary}{tb_note}<br>"
             f"<b>写入 {written} 个文件(跳过 {skipped})</b>{file_lines or '<br>　(无文件)'}"
         )
         msg = (f"已生成 {len(files)} 个文件,写入 {written} 个。" if files

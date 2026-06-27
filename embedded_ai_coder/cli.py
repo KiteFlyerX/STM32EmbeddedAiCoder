@@ -218,6 +218,11 @@ def cmd_implement(args: argparse.Namespace) -> int:
 
     print("\n---------- AI 实现摘要 ----------")
     print(summary or "(无摘要)")
+    syms = meta.get("tokenbase_symbols", [])
+    if syms:
+        print(f"  tokenbase 抽取符号:{syms}")
+    for echo in meta.get("tokenbase_echo", []):
+        print(f"    $ {echo}")
     for echo in meta.get("docs_echo", []):
         print(f"  预读:{echo}")
     print(f"  生成文件数:{len(files)}  mock={meta.get('mock', False)}"

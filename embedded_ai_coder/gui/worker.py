@@ -223,6 +223,9 @@ class LoopWorker(QObject):
                 "written": written, "skipped": skipped,
                 "mock": meta.get("mock", False),
                 "error": meta.get("error", ""),
+                "tb_symbols": meta.get("tokenbase_symbols", []),
+                "tb_hits": sum(1 for e in (meta.get("tokenbase_echo", []) or [])
+                               if "未在 tokenbase" not in e and "exit_ok=True" in e),
             })
         except Exception as exc:  # noqa: BLE001
             logger.exception("implement 失败")

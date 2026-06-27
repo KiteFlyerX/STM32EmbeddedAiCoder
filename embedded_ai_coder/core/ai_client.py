@@ -73,12 +73,13 @@ SYSTEM_PROMPT = (
 )
 
 
-# 实现模式系统提示词:据原理图+需求文档,生成/实现产品固件文件(整文件输出)
+# 实现模式系统提示词:据原理图+需求文档+工程已有签名,生成/实现产品固件文件(整文件输出)
 IMPLEMENT_SYSTEM_PROMPT = (
     "你是一名资深 STM32 嵌入式 C 工程师。用户会给你【项目文档预读】"
-    "(需求文档正文 + 原理图元信息/图片)与【实现目标】。"
-    "请据此实现产品的固件功能:为每个需要的源文件给出完整内容"
-    "(STM32 HAL 风格,可直接放入工程编译)。\n\n"
+    "(需求文档正文 + 原理图元信息/图片)、【实现目标】,以及【来自代码数据库的工程已有签名上下文】"
+    "(现有函数 signature Lens / HAL 句柄 / 类型 / 宏的定位)。"
+    "请据此实现产品的固件功能:复用/扩展现有代码、用对已有句柄名与类型,"
+    "为每个需要的源文件给出完整内容(STM32 HAL 风格,可直接放入工程编译)。\n\n"
     "输出要求:\n"
     "- 必须返回严格 JSON,不要 markdown 代码块包裹,不要解释性前言。\n"
     "- schema:\n"
@@ -180,14 +181,20 @@ class AiClientImpl(AiClient):
     def implement_from_docs(self, goal: str, scope: str = "") -> dict:
         """据预读的原理图 + 需求文档,让 AI 实现/生成产品固件文件。
 
-        返回 {summary, files:[{path,content,reason}], meta}。meta 含 docs_echo / images_sent。
-        无 key/dry_run 时走 mock。
+        同时用 STM32_TokenBase 查询工程已有符号的 signature Lens,让生成的代码
+        与现有源码(函数/HAL 句柄/类型/宏)衔接,而非盲写。
+        返回 {summary, files:[{path,content,reason}], meta}。meta 含 docs_echo /
+        images_sent / tokenbase_symbols / tokenbase_echo。无 key/dry_run 时走 mock。
         """
         docs_text, docs_images, docs_echo = self._gather_docs()
+        # 从目标 + 需求文档抽候选符号 → tokenbase 查已有签名
+        tb_symbols = self._extract_symbols_impl(
+            f"{goal}\n{scope}\n{docs_text}", limit=max(self.cfg.max_symbols, 16))
+        lens_block, tb_echo = self._gather_tokenbase(tb_symbols)
         if self._should_mock():
             result = self._mock_implement(goal)
         else:
-            user_msg = self._build_implement_prompt(goal, scope, docs_text)
+            user_msg = self._build_implement_prompt(goal, scope, docs_text, lens_block)
             messages = [
                 {"role": "system", "content": IMPLEMENT_SYSTEM_PROMPT},
                 {"role": "user", "content": user_msg},
@@ -203,9 +210,40 @@ class AiClientImpl(AiClient):
         result.setdefault("meta", {})
         result["meta"]["docs_echo"] = docs_echo
         result["meta"]["images_sent"] = len(docs_images)
+        result["meta"]["tokenbase_symbols"] = tb_symbols
+        result["meta"]["tokenbase_echo"] = tb_echo
         return result
 
-    def _build_implement_prompt(self, goal: str, scope: str, docs_text: str) -> str:
+    def _extract_symbols_impl(self, text: str, limit: int = 16) -> list[str]:
+        """从实现目标/需求文本里抽「代码味」候选符号(函数/句柄/宏/类型),供 tokenbase query。
+
+        判定:含下划线 / camelCase / 全大写宏 / 含数字(引脚句柄如 hi2c1、PB10、SHT40)。
+        未命中的会在 Lens 块里标注,不影响。
+        """
+        stop = {"the", "and", "for", "with", "that", "this", "from", "into", "using",
+                "void", "int", "char", "float", "double", "struct", "enum", "return",
+                "static", "const", "extern", "true", "false", "null", "size_t"}
+        syms: list[str] = []
+        seen: set[str] = set()
+        for m in re.finditer(r"[A-Za-z_]\w{2,}", text or ""):
+            tok = m.group(0)
+            low = tok.lower()
+            if low in stop or low in seen:
+                continue
+            is_code = ("_" in tok
+                       or any(c.isupper() for c in tok[1:])    # camelCase / 含大写
+                       or (tok.isupper() and len(tok) > 2)     # 全大写宏
+                       or any(c.isdigit() for c in tok))        # 含数字(引脚/句柄)
+            if not is_code:
+                continue
+            seen.add(low)
+            syms.append(tok)
+            if len(syms) >= limit:
+                break
+        return syms
+
+    def _build_implement_prompt(self, goal: str, scope: str, docs_text: str,
+                                lens_block: str = "") -> str:
         parts = ["# 实现目标",
                  goal.strip() or "根据下方需求文档与原理图,实现产品的全部固件功能。"]
         if scope.strip():
@@ -213,6 +251,11 @@ class AiClientImpl(AiClient):
             parts.append(scope.strip())
         parts.append("")
         parts.append(docs_text or "(无项目文档上下文)")
+        if lens_block.strip():
+            parts.append("")
+            parts.append(lens_block)
+            parts.append("\n实现时请复用/扩展上面已有的函数、HAL 句柄(如 hi2c1/huart3)、类型与宏,"
+                         "保证新生成代码与现有源码衔接、可直接编译。")
         parts.append("\n请输出实现方案(严格 JSON:summary + files[])。")
         return "\n".join(parts)
 
