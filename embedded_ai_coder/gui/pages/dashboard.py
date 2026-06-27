@@ -218,6 +218,15 @@ class DashboardPage(QWidget):
             fl = payload.get("failed", 0)
             self.aiLabel.setText(self.aiLabel.text().split("<br>")[0]
                                  + f"<br><b>已回写:应用 {ap} 处,失败 {fl} 处</b>")
+        elif stage == "build_heal":
+            self.aiLabel.setText(
+                f"⟳ 编译失败,回喂 AI 自愈(第 {payload.get('attempt')}/{payload.get('max')} 轮)…")
+        elif stage == "built":
+            if payload.get("ok"):
+                heal = payload.get("heal_attempts", 0)
+                self.aiLabel.setText(f"✓ 编译通过" + (f"(经 {heal} 轮自愈)" if heal else ""))
+            else:
+                self.aiLabel.setText("✗ 编译失败(自愈未通过,见日志)")
         elif stage == "verified":
             ok = payload.get("verified")
             if ok is True:

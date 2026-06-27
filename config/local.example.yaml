@@ -40,6 +40,8 @@ loop:
   max_iterations: 10
   timeout_sec: 600
   auto_flash: false          # 烧录前人工确认;true 则自动烧录
+  auto_build: true           # 自动编译 + 编译失败自愈(回喂 AI 改码重编)
+  build_heal_retries: 2      # 编译自愈最多尝试轮数
 
 # 项目文档预读(F-24):让 AI 带着原理图/需求背景改码
 # 原理图支持多模态视觉(图片 png/jpg 直传;pdf 需可选 pymupdf);需求文档纯标准库抽取

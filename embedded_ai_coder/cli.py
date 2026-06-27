@@ -70,8 +70,13 @@ def _make_step_printer():
             print(f"[4/7 回写]   应用 {payload.get('applied', 0)} 处,"
                   f"失败 {payload.get('failed', 0)} 处;"
                   f"文件:{payload.get('diff_files', [])}")
+        elif stage == "build_heal":
+            print(f"[5/7 自愈]   编译失败,回喂 AI 自愈(第 {payload.get('attempt')}/"
+                  f"{payload.get('max')} 轮)")
         elif stage == "built":
-            print(f"[5/7 构建]   ok={payload.get('ok')}")
+            heal = payload.get("heal_attempts", 0)
+            extra = f"(经 {heal} 轮编译自愈)" if heal else ""
+            print(f"[5/7 构建]   ok={payload.get('ok')} {extra}")
         elif stage == "flash_skipped":
             print(f"[6/7 烧录]   跳过:{payload.get('reason', '')}")
         elif stage == "flashed":

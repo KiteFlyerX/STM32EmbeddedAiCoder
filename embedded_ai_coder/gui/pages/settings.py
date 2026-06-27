@@ -69,6 +69,7 @@ class SettingsPage(QWidget):
         col.addWidget(self._loopMaxCard())
         col.addWidget(self._loopTimeoutCard())
         col.addWidget(self._loopAutoFlashCard())
+        col.addWidget(self._loopAutoBuildCard())
         col.addWidget(self._section("界面"))
         col.addWidget(self._themeCard())
         col.addStretch(1)
@@ -183,6 +184,20 @@ class SettingsPage(QWidget):
         card.hBoxLayout.addSpacing(16)
         return card
 
+    def _loopAutoBuildCard(self) -> SettingCard:
+        card = self._card(FIF.SYNC, "自动编译 + 编译自愈",
+                          "编译失败自动把错误回喂 AI 改码重编;开启后全程无需人工接管编译")
+        self.swAutoBuild = SwitchButton(self)
+        self.swAutoBuild.setChecked(bool((self.config.get("loop", {}) or {}).get("auto_build", True)))
+        card.hBoxLayout.addWidget(BodyLabel("自愈轮数:", self))
+        self.sbBuildHeal = SpinBox(self)
+        self.sbBuildHeal.setRange(0, 10)
+        self.sbBuildHeal.setValue(int((self.config.get("loop", {}) or {}).get("build_heal_retries", 2)))
+        card.hBoxLayout.addWidget(self.sbBuildHeal)
+        card.hBoxLayout.addWidget(self.swAutoBuild)
+        card.hBoxLayout.addSpacing(16)
+        return card
+
     def _themeCard(self) -> SettingCard:
         card = self._card(FIF.BASKETBALL, "主题", "亮色 / 暗色 / 跟随系统(即时切换)")
         self.cbTheme = ComboBox(self)
@@ -213,6 +228,8 @@ class SettingsPage(QWidget):
                 "max_iterations": self.sbMaxIter.value(),
                 "timeout_sec": self.sbTimeout.value(),
                 "auto_flash": self.swAutoFlash.isChecked(),
+                "auto_build": self.swAutoBuild.isChecked(),
+                "build_heal_retries": self.sbBuildHeal.value(),
             },
             "ui": {"theme": self.cbTheme.currentText()},
         }

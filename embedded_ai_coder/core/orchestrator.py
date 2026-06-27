@@ -70,6 +70,8 @@ class OrchestratorImpl(Orchestrator):
         max_iterations: int = 10,
         timeout_sec: float = 600.0,
         auto_flash: bool = False,
+        auto_build: bool = True,
+        build_heal_retries: int = 2,
         confirm_fn: Optional[Callable[[str], bool]] = None,
         collect_lines_per_iter: int = 200,
         on_step: Optional[Callable[[str, dict], None]] = None,
@@ -84,6 +86,8 @@ class OrchestratorImpl(Orchestrator):
         self.max_iterations = max_iterations
         self.timeout_sec = timeout_sec
         self.auto_flash = auto_flash
+        self.auto_build = auto_build                  # 编译失败是否回喂 AI 自愈
+        self.build_heal_retries = build_heal_retries  # 自愈最多尝试轮数
         # confirm_fn(message)->bool;默认 input() 交互(M1 CLI 用)
         self.confirm_fn = confirm_fn or self._default_confirm
         self.collect_lines_per_iter = collect_lines_per_iter
@@ -204,12 +208,33 @@ class OrchestratorImpl(Orchestrator):
             res.note = "补丁均未命中文件"
             return res
 
-        # 5) 构建(可选)
+        # 5) 构建(可选)+ 编译自愈(F-08):失败则把编译错误回喂 AI 改码重编,达上限止
         build_ok, build_log = self.builder.build()
         res.build_ok = build_ok
-        self._emit("built", {"ok": build_ok, "log_tail": build_log[-400:]})
+        heal_attempts = 0
+        max_heal = self.build_heal_retries if self.auto_build else 0
+        while not build_ok and heal_attempts < max_heal:
+            heal_attempts += 1
+            self._emit("build_heal", {"attempt": heal_attempts, "max": max_heal,
+                                      "log_tail": build_log[-300:]})
+            heal_out = self.ai_client.diagnose_and_patch(
+                log_context=fragment, source_context="", goal=goal,
+                build_errors=build_log)
+            heal_patches = heal_out.get("patches", [])
+            if not heal_patches:
+                res.note = f"编译自愈:第 {heal_attempts} 轮 AI 未给补丁,放弃"
+                break
+            ok_n, _fail_n = self.coder.apply_many(heal_patches)
+            if ok_n == 0:
+                res.note = f"编译自愈:第 {heal_attempts} 轮补丁未命中,放弃"
+                break
+            build_ok, build_log = self.builder.build()
+            res.build_ok = build_ok
+        self._emit("built", {"ok": build_ok, "log_tail": build_log[-400:],
+                             "heal_attempts": heal_attempts})
         if not build_ok:
-            res.note = "构建失败(M1 不回喂,需人工介入)"
+            res.note = (f"构建失败(已编译自愈 {heal_attempts} 轮)" if heal_attempts
+                        else "构建失败(auto_build 关闭,未自愈)")
             return res
 
         # 6) 烧录(人工确认 / dry-run)
@@ -301,6 +326,8 @@ def make_orchestrator(config: dict, *, dry_run: bool = False,
         max_iterations=int(loop.get("max_iterations", 10)),
         timeout_sec=float(loop.get("timeout_sec", 600.0)),
         auto_flash=bool(loop.get("auto_flash", False)),
+        auto_build=bool(loop.get("auto_build", True)),
+        build_heal_retries=int(loop.get("build_heal_retries", 2)),
         confirm_fn=confirm_fn, on_step=on_step,
         pause_event=pause_event,
     )

@@ -138,10 +138,12 @@ class AiClientImpl(AiClient):
         log_context: str,
         source_context: str,
         goal: str = "",
+        build_errors: str = "",
     ) -> dict:
         """主入口。返回 {diagnosis, patches, meta}。
 
         meta 里有 tokenbase 查询的回显(query 命令 + Lens),便于审计演示。
+        build_errors 非空时(编译自愈用),优先让 AI 修复编译错误。
         """
         # 1) 从日志片段里抽符号 → tokenbase query 取 Lens
         symbols = self._extract_symbols(log_context)
@@ -152,10 +154,11 @@ class AiClientImpl(AiClient):
 
         # 2) 决定 mock 还是真调
         if self._should_mock():
-            result = self._mock_result(log_context, lens_block)
+            result = self._mock_result(log_context, lens_block,
+                                       build_errors=build_errors)
         else:
             result = self._call_model(log_context, lens_block, source_context, goal,
-                                      docs_text, docs_images)
+                                      docs_text, docs_images, build_errors)
 
         result.setdefault("meta", {})
         result["meta"]["tokenbase_symbols"] = symbols
@@ -289,11 +292,12 @@ class AiClientImpl(AiClient):
 
     def _call_model(self, log_context: str, lens_block: str,
                     source_context: str, goal: str,
-                    docs_text: str = "", docs_images: list[str] | None = None) -> dict:
+                    docs_text: str = "", docs_images: list[str] | None = None,
+                    build_errors: str = "") -> dict:
         """调 OpenAI 兼容 API。有原理图图片时走多模态(content 列表含 image_url)。"""
         docs_images = docs_images or []
         user_msg = self._build_user_prompt(log_context, lens_block, source_context, goal,
-                                           docs_text)
+                                           docs_text, build_errors)
         messages = self._build_messages(user_msg, docs_images)
         try:
             content = self._post_chat(messages)
@@ -301,7 +305,8 @@ class AiClientImpl(AiClient):
         except Exception as exc:
             logger.error("模型调用失败,回退 mock:%s", exc)
             return self._mock_result(log_context, lens_block,
-                                     error=f"模型调用失败:{exc}")
+                                     error=f"模型调用失败:{exc}",
+                                     build_errors=build_errors)
 
     def _build_messages(self, user_msg: str, docs_images: list[str]) -> list[dict]:
         """构造 messages:有原理图图片 + vision 开启时,user content 用 [text,image_url...]。"""
@@ -384,10 +389,16 @@ class AiClientImpl(AiClient):
 
     def _build_user_prompt(self, log_context: str, lens_block: str,
                            source_context: str, goal: str,
-                           docs_text: str = "") -> str:
+                           docs_text: str = "", build_errors: str = "") -> str:
         parts: list[str] = []
         if goal:
             parts.append(f"# 用户目标\n{goal}")
+        # 编译自愈:把上一轮编译错误喂回,优先修复
+        if build_errors.strip():
+            parts.append("\n# 上一轮编译错误(优先修复以通过编译)")
+            parts.append("```")
+            parts.append(build_errors.strip()[-2000:])
+            parts.append("```")
         parts.append("# 串口日志(fault 现场)")
         parts.append("```")
         parts.append(log_context.strip())
@@ -402,7 +413,10 @@ class AiClientImpl(AiClient):
             parts.append("```c")
             parts.append(source_context.strip())
             parts.append("```")
-        parts.append("\n请给出根因 + 最小化 C 补丁(严格 JSON)。")
+        tail = ("请优先修复上面的编译错误,给出通过编译的最小补丁(严格 JSON)。"
+                if build_errors.strip()
+                else "请给出根因 + 最小化 C 补丁(严格 JSON)。")
+        parts.append("\n" + tail)
         return "\n".join(parts)
 
     def _parse_model_json(self, content: str) -> dict:
@@ -443,16 +457,20 @@ class AiClientImpl(AiClient):
 
     # ---------- mock ----------
     def _mock_result(self, log_context: str, lens_block: str,
-                     error: str = "") -> dict:
+                     error: str = "", build_errors: str = "") -> dict:
         """mock 模式:基于演示工程的已知 bug 返回一个预制 patch。
 
         该 patch 针对 examples/demo_project 的越界 bug:
         ``for (i = 0; i <= SENSOR_BUF_SIZE; i++)`` → ``i < SENSOR_BUF_SIZE``。
+        build_errors 非空时(编译自愈演示),diagnosis 标注为编译修复。
         """
-        diagnosis = (
-            "[mock] 根因:sensor_samples_read 循环边界为 i <= SENSOR_BUF_SIZE,"
-            "导致对 8 长度缓冲越界写,触发 HardFault(PRECISERR)。"
-        )
+        if build_errors.strip():
+            diagnosis = "[mock] 编译自愈:据编译错误返回修复补丁(演示)。"
+        else:
+            diagnosis = (
+                "[mock] 根因:sensor_samples_read 循环边界为 i <= SENSOR_BUF_SIZE,"
+                "导致对 8 长度缓冲越界写,触发 HardFault(PRECISERR)。"
+            )
         patches = [{
             "file": "src/demo_sensor.c",
             "anchor": "sensor_samples_read",

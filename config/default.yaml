@@ -32,7 +32,9 @@ ai:
 loop:
   max_iterations: 10    # 最大自动迭代轮数
   timeout_sec: 600
-  auto_flash: false     # 自动烧录开关(默认关闭,需人工确认)
+  auto_flash: false     # 自动烧录开关(默认关闭,需人工确认);开启后闭环全自动烧录
+  auto_build: true      # 自动编译 + 编译失败自愈(把错误回喂 AI 改码重编)
+  build_heal_retries: 2 # 编译自愈最多尝试轮数
 
 # 项目文档预读(F-24):闭环启动时把原理图/需求文档读一次、缓存复用,注入 AI 上下文
 docs:
