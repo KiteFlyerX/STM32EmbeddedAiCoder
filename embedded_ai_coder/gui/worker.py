@@ -72,6 +72,7 @@ class LoopWorker(QObject):
     flashResult = Signal(dict)            # {ok, reason}
     applyResult = Signal(dict)            # {applied, failed, file, ok}
     rollbackResult = Signal(int)          # 回滚条数
+    implementResult = Signal(dict)        # AI 实现结果 {summary, files, written, skipped, mock, error}
 
     # ---- 跨线程确认(GUI 弹框,worker 阻塞等回答)----
     confirmRequested = Signal(str, object)  # (message, answer_queue)
@@ -201,6 +202,34 @@ class LoopWorker(QObject):
             return
         n = orch.coder.rollback_all()
         self.rollbackResult.emit(n)
+
+    @Slot(str)
+    def do_implement(self, goal: str) -> None:
+        """据预读的原理图+需求文档,用 AI 实现产品固件并写回工程(worker 线程)。"""
+        orch = self._ensure_orch()
+        if orch is None:
+            return
+        try:
+            out = orch.ai_client.implement_from_docs(goal=goal or "")
+            files = out.get("files", [])
+            written, skipped = (0, 0)
+            if files:
+                written, skipped = orch.coder.write_files(files)
+            meta = out.get("meta", {}) or {}
+            self.implementResult.emit({
+                "summary": out.get("summary", ""),
+                "files": [{"path": f["path"], "reason": f.get("reason", ""),
+                           "chars": len(f.get("content", ""))} for f in files],
+                "written": written, "skipped": skipped,
+                "mock": meta.get("mock", False),
+                "error": meta.get("error", ""),
+            })
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("implement 失败")
+            self.implementResult.emit({
+                "summary": "", "files": [], "written": 0, "skipped": 0,
+                "mock": False, "error": f"{type(exc).__name__}: {exc}",
+            })
 
     # ---------- 内部 ----------
     def _ensure_orch(self):

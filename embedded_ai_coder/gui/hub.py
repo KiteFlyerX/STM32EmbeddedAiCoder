@@ -39,6 +39,7 @@ class EngineHub(QObject):
     flashResult = Signal(dict)
     applyResult = Signal(dict)
     rollbackResult = Signal(int)
+    implementResult = Signal(dict)        # AI 实现结果
     confirmRequested = Signal(str, object)   # 跨线程确认(message, answer_queue)
 
     # ---- 页面 → worker(排队到 worker 线程)----
@@ -47,6 +48,7 @@ class EngineHub(QObject):
     _flashRequested = Signal()
     _applyRequested = Signal(dict)
     _rollbackRequested = Signal()
+    _implementRequested = Signal(str)
 
     def __init__(self, config: dict[str, Any], parent: Optional[QObject] = None):
         super().__init__(parent)
@@ -63,6 +65,7 @@ class EngineHub(QObject):
         self._flashRequested.connect(self.worker.do_flash)
         self._applyRequested.connect(self.worker.do_apply)
         self._rollbackRequested.connect(self.worker.do_rollback)
+        self._implementRequested.connect(self.worker.do_implement)
 
         # worker 信号 → hub 信号(转发,跨线程回到 GUI 线程)
         self.worker.progress.connect(self.progress)
@@ -76,6 +79,7 @@ class EngineHub(QObject):
         self.worker.flashResult.connect(self.flashResult)
         self.worker.applyResult.connect(self.applyResult)
         self.worker.rollbackResult.connect(self.rollbackResult)
+        self.worker.implementResult.connect(self.implementResult)
         self.worker.confirmRequested.connect(self.confirmRequested)
 
         self.thread.start()
@@ -106,6 +110,10 @@ class EngineHub(QObject):
 
     def rollback(self) -> None:
         self._rollbackRequested.emit()
+
+    def implement_now(self, goal: str) -> None:
+        """据原理图+需求文档,用 AI 实现产品固件(排队到 worker 线程)。"""
+        self._implementRequested.emit(goal)
 
     # ---------- 生命周期 ----------
     def shutdown(self, timeout_ms: int = 10000) -> None:

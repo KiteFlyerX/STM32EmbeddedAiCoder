@@ -185,6 +185,57 @@ def cmd_index(args: argparse.Namespace) -> int:
     return 0 if ok else 2
 
 
+def cmd_implement(args: argparse.Namespace) -> int:
+    """据预读的原理图 + 需求文档,调用配置的 AI 实现产品固件并写回工程。"""
+    from .core.ai_client import make_ai_client
+    from .core.coder import CoderImpl
+
+    config = load_config()
+    if args.project:
+        root_abs = str(Path(args.project).resolve())
+        config.setdefault("project", {})["root"] = root_abs
+        config.setdefault("ai", {})["tokenbase_dir"] = root_abs
+    root = (config.get("project", {}) or {}).get("root", "")
+    if not root:
+        print("错误:未配置 project.root(用 --project 指定或在 config 配置)。")
+        return 2
+
+    print(f"工程目录:{root}")
+    print(f"实现目标:{args.goal or '(据需求文档实现全部功能)'}")
+    print(f"模型:{(config.get('ai', {}) or {}).get('model', '(未配置)')}")
+
+    ai = make_ai_client(config)
+    coder = CoderImpl(root)
+    out = ai.implement_from_docs(goal=args.goal or "", scope=args.scope or "")
+    summary = out.get("summary", "")
+    files = out.get("files", [])
+    meta = out.get("meta", {})
+
+    print("\n---------- AI 实现摘要 ----------")
+    print(summary or "(无摘要)")
+    for echo in meta.get("docs_echo", []):
+        print(f"  预读:{echo}")
+    print(f"  生成文件数:{len(files)}  mock={meta.get('mock', False)}"
+          f"  图片随附={meta.get('images_sent', 0)}")
+    if meta.get("error"):
+        print(f"  错误:{meta['error']}")
+
+    if not files:
+        print("\n(AI 未产出可写文件)")
+        return 1
+
+    print("\n---------- 写入工程 ----------")
+    written, skipped = coder.write_files(files)
+    print(f"写入 {written} 个,跳过 {skipped} 个:")
+    for f in files:
+        print(f"  · {f['path']}  ({len(f['content'])} 字符)  {f.get('reason', '')}")
+    print("\n提示:如需撤销,回滚将删除新建文件 / 还原已覆盖文件(.bak)。")
+
+    if args.json:
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="embedded-ai-coder",
@@ -214,6 +265,14 @@ def build_parser() -> argparse.ArgumentParser:
     pi.add_argument("--force", action="store_true", help="强制全量重解析")
     pi.add_argument("-v", "--verbose", action="store_true")
     pi.set_defaults(func=cmd_index)
+
+    pim = sub.add_parser("implement", help="据原理图+需求文档,用 AI 实现产品固件")
+    pim.add_argument("--goal", default="", help="实现目标(自然语言)")
+    pim.add_argument("--scope", default="", help="范围/约束(可选)")
+    pim.add_argument("--project", default="", help="工程根目录(覆盖 config.project.root)")
+    pim.add_argument("--json", action="store_true", help="额外输出结果 JSON")
+    pim.add_argument("-v", "--verbose", action="store_true")
+    pim.set_defaults(func=cmd_implement)
     return p
 
 

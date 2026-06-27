@@ -30,6 +30,31 @@ from .interfaces import AiClient
 
 logger = logging.getLogger(__name__)
 
+
+def _has_image(messages: list[dict]) -> bool:
+    """messages 里是否含 image_url 内容(多模态)。"""
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, list):
+            for part in c:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    return True
+    return False
+
+
+def _strip_images(messages: list[dict]) -> list[dict]:
+    """把多模态 content 退化为纯文本(只保留 text 部分,拼接)。"""
+    out: list[dict] = []
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, list):
+            texts = [p.get("text", "") for p in c
+                     if isinstance(p, dict) and p.get("type") == "text"]
+            out.append({**m, "content": "\n".join(t for t in texts if t)})
+        else:
+            out.append(m)
+    return out
+
 # 系统提示词:告诉模型它是嵌入式代码医生,且必须返回严格 JSON
 SYSTEM_PROMPT = (
     "你是一名资深 STM32 嵌入式 C 工程师与故障诊断专家。"
@@ -48,6 +73,24 @@ SYSTEM_PROMPT = (
 )
 
 
+# 实现模式系统提示词:据原理图+需求文档,生成/实现产品固件文件(整文件输出)
+IMPLEMENT_SYSTEM_PROMPT = (
+    "你是一名资深 STM32 嵌入式 C 工程师。用户会给你【项目文档预读】"
+    "(需求文档正文 + 原理图元信息/图片)与【实现目标】。"
+    "请据此实现产品的固件功能:为每个需要的源文件给出完整内容"
+    "(STM32 HAL 风格,可直接放入工程编译)。\n\n"
+    "输出要求:\n"
+    "- 必须返回严格 JSON,不要 markdown 代码块包裹,不要解释性前言。\n"
+    "- schema:\n"
+    '  {"summary":"本次实现了什么(一两句)",\n'
+    '   "files":[{"path":"相对工程根的路径(如 src/sht40.c)",'
+    '"content":"该文件完整 C 源码","reason":"该文件职责"}]}\n'
+    "- content 是该文件的完整源码(含头文件声明与实现),保留缩进与换行,不要用 ``` 包裹。\n"
+    "- 路径用正斜杠;按需求文档实现全部功能模块。\n"
+    "- 优先复用/扩展现有文件;确需新建才给新文件。"
+)
+
+
 @dataclass
 class AiConfig:
     """AI 段配置。"""
@@ -58,6 +101,7 @@ class AiConfig:
     dry_run: bool = False          # 强制 mock(无 key 或 --dry-run)
     tokenbase_dir: str = ""        # 工程目录(用于 tokenbase query)
     max_symbols: int = 8           # 单轮最多 query 的符号数(控 token)
+    max_tokens: int = 8192         # 生成上限(推理模型需较大,否则 content 被截断为空)
     docs: Optional[DocsConfig] = None   # 项目文档预读配置(原理图/需求文档)
 
 
@@ -72,6 +116,7 @@ def make_ai_config(config: dict) -> AiConfig:
         base_url=ai.get("base_url", ""),
         tokenbase_dir=ai.get("tokenbase_dir", project_root),
         max_symbols=int(ai.get("max_symbols", 8)),
+        max_tokens=int(ai.get("max_tokens", 8192)),
         docs=make_docs_config(config),
     )
 
@@ -128,6 +173,84 @@ class AiClientImpl(AiClient):
         images = self._docs.render_images(items)
         return text_block, images, echo
 
+    # ---------- 据文档实现功能(F-24 扩展)----------
+    def implement_from_docs(self, goal: str, scope: str = "") -> dict:
+        """据预读的原理图 + 需求文档,让 AI 实现/生成产品固件文件。
+
+        返回 {summary, files:[{path,content,reason}], meta}。meta 含 docs_echo / images_sent。
+        无 key/dry_run 时走 mock。
+        """
+        docs_text, docs_images, docs_echo = self._gather_docs()
+        if self._should_mock():
+            result = self._mock_implement(goal)
+        else:
+            user_msg = self._build_implement_prompt(goal, scope, docs_text)
+            messages = [
+                {"role": "system", "content": IMPLEMENT_SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ]
+            try:
+                # 整文件生成 token 消耗大;起始用配置预算,不足时 _post_chat 自动翻倍
+                content = self._post_chat(messages, budget=self.cfg.max_tokens)
+                result = self._parse_implement_json(content)
+            except Exception as exc:
+                logger.error("实现生成失败:%s", exc)
+                result = {"summary": f"(生成失败:{exc})", "files": [],
+                          "meta": {"error": str(exc)}}
+        result.setdefault("meta", {})
+        result["meta"]["docs_echo"] = docs_echo
+        result["meta"]["images_sent"] = len(docs_images)
+        return result
+
+    def _build_implement_prompt(self, goal: str, scope: str, docs_text: str) -> str:
+        parts = ["# 实现目标",
+                 goal.strip() or "根据下方需求文档与原理图,实现产品的全部固件功能。"]
+        if scope.strip():
+            parts.append("\n# 范围 / 约束")
+            parts.append(scope.strip())
+        parts.append("")
+        parts.append(docs_text or "(无项目文档上下文)")
+        parts.append("\n请输出实现方案(严格 JSON:summary + files[])。")
+        return "\n".join(parts)
+
+    def _parse_implement_json(self, content: str) -> dict:
+        """解析实现结果 JSON(容错:剥离 ```、抓首个 {...})。"""
+        text = content.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if m:
+            text = m.group(0)
+        try:
+            obj = json.loads(text)
+        except json.JSONDecodeError as exc:
+            logger.error("实现 JSON 解析失败:%s", exc)
+            return {"summary": f"(JSON 解析失败:{exc})", "files": [],
+                    "meta": {"raw_truncated": content[:800]}}
+        files = []
+        for f in (obj.get("files") or []):
+            path = (f.get("path") or "").replace("\\", "/").lstrip("/")
+            content_text = f.get("content") or ""
+            if path and content_text.strip():
+                files.append({"path": path, "content": content_text,
+                              "reason": f.get("reason", "")})
+        return {"summary": obj.get("summary", ""), "files": files}
+
+    def _mock_implement(self, goal: str) -> dict:
+        """mock:无 key 时返回示意实现,保证流程可演示。"""
+        return {
+            "summary": "[mock] 未配置 ai.api_key,返回示意骨架(配好 key 后由模型生成)",
+            "files": [{
+                "path": "src/sht40.c",
+                "content": ('/* mock 占位:配置 ai.api_key 后由模型生成 */\n'
+                            '#include "sht40.h"\n\n'
+                            'int sht40_read(float *temp, float *rh) { (void)temp; (void)rh; return 0; }\n'),
+                "reason": "示意:SHT40 温湿度读取骨架",
+            }],
+            "meta": {"mock": True},
+        }
+
     # ---------- tokenbase 接入 ----------
     def _extract_symbols(self, log_context: str) -> list[str]:
         """从日志里抽候选符号名(``symbol + offset`` 形态)。"""
@@ -168,15 +291,20 @@ class AiClientImpl(AiClient):
                     source_context: str, goal: str,
                     docs_text: str = "", docs_images: list[str] | None = None) -> dict:
         """调 OpenAI 兼容 API。有原理图图片时走多模态(content 列表含 image_url)。"""
-        import httpx  # lazy
-
         docs_images = docs_images or []
         user_msg = self._build_user_prompt(log_context, lens_block, source_context, goal,
                                            docs_text)
-        base = (self.cfg.base_url or "https://api.openai.com/v1").rstrip("/")
-        url = f"{base}/chat/completions"
-        # 多模态:有图片 + 配置开启 vision 时,user content 用 [text, image_url...] 列表;
-        # 否则保持纯字符串(兼容纯文本模型)。
+        messages = self._build_messages(user_msg, docs_images)
+        try:
+            content = self._post_chat(messages)
+            return self._parse_model_json(content)
+        except Exception as exc:
+            logger.error("模型调用失败,回退 mock:%s", exc)
+            return self._mock_result(log_context, lens_block,
+                                     error=f"模型调用失败:{exc}")
+
+    def _build_messages(self, user_msg: str, docs_images: list[str]) -> list[dict]:
+        """构造 messages:有原理图图片 + vision 开启时,user content 用 [text,image_url...]。"""
         if docs_images and self.cfg.docs and self.cfg.docs.vision:
             user_content: object = [{"type": "text", "text": user_msg}]
             for data_url in docs_images:
@@ -184,29 +312,75 @@ class AiClientImpl(AiClient):
                     {"type": "image_url", "image_url": {"url": data_url}})
         else:
             user_content = user_msg
-        payload = {
-            "model": self.cfg.model or "gpt-4o-mini",
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            "temperature": 0.2,
-            "response_format": {"type": "json_object"},
-        }
+        return [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ]
+
+    def _post_chat(self, messages: list[dict], *, want_json: bool = True,
+                   budget: int | None = None) -> str:
+        """发 chat/completions 并处理推理模型与端点差异。返回 content 文本。
+
+        三级自动回退:
+        - response_format=json_object 被端点拒(400)→ 去掉重试(按文本解析 JSON)。
+        - 图片(image_url)被端点拒(如 glm-5.1 仅接受 text)→ 退化为纯文本重试。
+        - 推理模型 content 空 + finish=length → 加倍 max_tokens 重试(glm-5.1 思考在
+          reasoning_content、答案在 content,预算不足时 content 会被截断为空)。
+
+        budget:起始 max_tokens(整文件生成可传更大值);默认用 cfg.max_tokens。
+        """
+        import httpx  # lazy
+
+        base = (self.cfg.base_url or "https://api.openai.com/v1").rstrip("/")
+        url = f"{base}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.cfg.api_key}",
             "Content-Type": "application/json",
         }
-        try:
-            resp = httpx.post(url, json=payload, headers=headers, timeout=120.0)
+        budget = budget or self.cfg.max_tokens
+        rf = {"type": "json_object"} if want_json else None
+        msgs = messages
+        for attempt in range(5):
+            payload = {
+                "model": self.cfg.model or "gpt-4o-mini",
+                "messages": msgs,
+                "temperature": 0.2,
+                "max_tokens": budget,
+            }
+            if rf:
+                payload["response_format"] = rf
+            resp = httpx.post(url, json=payload, headers=headers, timeout=180.0)
+            if resp.status_code == 400:
+                body = resp.text[:300]
+                if rf:  # 1) 端点拒 response_format
+                    logger.warning("端点拒绝 response_format,去掉后重试")
+                    rf = None
+                    continue
+                if _has_image(msgs):  # 2) 端点不支持图片
+                    logger.warning("端点不支持图片内容,退化为纯文本重试")
+                    msgs = _strip_images(msgs)
+                    continue
+                raise RuntimeError(f"API 400:{body}")
             resp.raise_for_status()
             data = resp.json()
-            content = data["choices"][0]["message"]["content"]
-            return self._parse_model_json(content)
-        except Exception as exc:
-            logger.error("模型调用失败,回退 mock:%s", exc)
-            return self._mock_result(log_context, lens_block,
-                                     error=f"模型调用失败:{exc}")
+            choice = (data.get("choices") or [{}])[0]
+            msg = choice.get("message", {}) or {}
+            content = (msg.get("content") or "").strip()
+            finish = choice.get("finish_reason")
+            if content:
+                return content
+            # content 空:推理模型可能被 max_tokens 截断 → 加预算重试
+            if finish == "length" and attempt < 4 and budget < 32768:
+                budget = min(budget * 2, 32768)
+                logger.warning("推理模型 content 为空(finish=length),max_tokens→%d 重试", budget)
+                continue
+            # 仍空:回退 reasoning_content(总比没有强)
+            reasoning = (msg.get("reasoning_content") or "").strip()
+            if reasoning:
+                logger.warning("模型 content 为空,回退 reasoning_content(%d 字符)", len(reasoning))
+                return reasoning
+            raise RuntimeError(f"模型返回空内容(finish={finish})")
+        raise RuntimeError("模型多次重试仍无内容")
 
     def _build_user_prompt(self, log_context: str, lens_block: str,
                            source_context: str, goal: str,

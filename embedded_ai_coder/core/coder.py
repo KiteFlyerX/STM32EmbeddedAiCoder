@@ -32,6 +32,7 @@ class _AppliedPatch:
     # 回滚用:把 new_text 还原为 old_text(同一文件内,仅一处时安全)
     old_text: str
     new_text: str
+    created: bool = False   # write_files 新建的文件:回滚时直接删除
 
 
 class CoderImpl(Coder):
@@ -92,6 +93,49 @@ class CoderImpl(Coder):
             else:
                 fail_n += 1
         return ok_n, fail_n
+
+    # ---------- 整文件写入(实现模式 F-24 扩展)----------
+    def write_files(self, files: list[dict]) -> tuple[int, int]:
+        """写入整文件(AI 实现模式产出)。files: [{path, content, reason}]。
+
+        - 已存在的文件先备份到 .bak;新建文件登记 created=True,回滚时删除。
+        - 路径必须落在工程根内(防穿越)。
+        返回 (写入数, 跳过数)。
+        """
+        written = skipped = 0
+        for f in files:
+            rel = (f.get("path") or "").strip()
+            content = f.get("content") or ""
+            if not rel or not content.strip():
+                skipped += 1
+                continue
+            target = (self.root / rel).resolve()
+            try:
+                target.relative_to(self.root)  # 防穿越
+            except ValueError:
+                logger.error("路径越界,跳过:%s", rel)
+                skipped += 1
+                continue
+            created = not target.exists()
+            bak = self._backup(target) if not created else None
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8")
+            except Exception as exc:
+                logger.error("写入 %s 失败:%s", target, exc)
+                skipped += 1
+                continue
+            old_text = ""
+            if not created and bak is not None and bak.exists():
+                try:
+                    old_text = bak.read_text(encoding="utf-8")
+                except Exception:
+                    old_text = ""
+            self._applied.append(_AppliedPatch(
+                target, bak or target, old_text, content, created=created))
+            logger.info("已写入 %s(%s)", rel, "新建" if created else "覆盖")
+            written += 1
+        return written, skipped
 
     # ---------- 定位 / 替换 ----------
     def _replace(self, content: str, old_text: str, new_text: str,
@@ -262,8 +306,11 @@ class CoderImpl(Coder):
         while self._applied:
             ap = self._applied.pop()
             try:
-                # 优先用 .bak 整体还原(最稳)
-                if ap.bak_path.exists():
+                if ap.created:
+                    # write_files 新建的文件:直接删除
+                    ap.file.unlink(missing_ok=True)
+                elif ap.bak_path.exists():
+                    # 优先用 .bak 整体还原(最稳)
                     shutil.copy2(ap.bak_path, ap.file)
                     ap.bak_path.unlink(missing_ok=True)
                 else:
