@@ -24,20 +24,9 @@ from .config import load_config
 
 
 def _setup_logging(verbose: bool) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    # Windows 控制台默认 GBK,中文会乱码;强制 UTF-8
-    for stream in (sys.stdout, sys.stderr):
-        reconfigure = getattr(stream, "reconfigure", None)
-        if callable(reconfigure):
-            try:
-                reconfigure(encoding="utf-8", errors="replace")
-            except Exception:
-                pass
+    """配置日志:控制台 + 滚动日志文件(共用 log_setup)。"""
+    from .log_setup import setup_logging
+    setup_logging(verbose=verbose, console=True)
 
 
 def _make_step_printer():

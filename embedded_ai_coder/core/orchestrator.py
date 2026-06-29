@@ -106,9 +106,12 @@ class OrchestratorImpl(Orchestrator):
         consecutive_fail = 0
 
         self._emit("start", {"goal": goal, "max_iterations": n})
+        logger.info("闭环启动: goal=%r max_iterations=%d auto_build=%s auto_flash=%s",
+                    goal, n, self.auto_build, self.auto_flash)
 
         for i in range(1, n + 1):
             if self._stop:
+                logger.info("停止:用户停止(轮次 %d)", i)
                 self._emit("stop", {"reason": "用户停止", "iteration": i})
                 break
             # 暂停(GUI):在迭代之间阻塞,但仍以 0.25s 粒度响应 stop
@@ -119,15 +122,22 @@ class OrchestratorImpl(Orchestrator):
                         break
                     self._pause_event.wait(timeout=0.25)
                 if self._stop:
+                    logger.info("停止:用户停止(暂停中, 轮次 %d)", i)
                     self._emit("stop", {"reason": "用户停止(暂停中)", "iteration": i})
                     break
                 self._emit("resumed", {"iteration": i})
             if time.monotonic() - start > self.timeout_sec:
+                logger.info("停止:超时(轮次 %d)", i)
                 self._emit("stop", {"reason": "超时", "iteration": i})
                 break
 
             self._emit("iteration_start", {"iteration": i})
             res = self._run_one_iteration(i, goal)
+            logger.info(
+                "第 %d 轮完成: fault=%s 补丁=%d 应用=%d build=%s flashed=%s "
+                "verified=%s note=%s",
+                i, bool(res.fault_fragment), len(res.patches), res.patches_applied,
+                res.build_ok, res.flashed, res.verified, res.note or "-")
 
             # 熔断:连续无 patch 或验证失败
             if not res.patches or res.verified is False:
@@ -138,13 +148,16 @@ class OrchestratorImpl(Orchestrator):
 
             # 验证通过则提前结束
             if res.verified is True:
+                logger.info("完成:验证通过(轮次 %d)", i)
                 self._emit("done", {"reason": "验证通过", "iteration": i})
                 break
             if consecutive_fail >= MAX_CONSECUTIVE_FAILS:
+                logger.info("停止:连续 %d 轮无进展,熔断", consecutive_fail)
                 self._emit("stop", {"reason": f"连续 {consecutive_fail} 轮无进展,熔断",
                                     "iteration": i})
                 break
 
+        logger.info("闭环结束:共 %d 轮", len(results))
         self._emit("finish", {"iterations": len(results)})
         return results
 
