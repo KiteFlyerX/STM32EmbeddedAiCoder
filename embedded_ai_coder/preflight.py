@@ -36,33 +36,60 @@ def _which(name: str) -> str:
     return shutil.which(name) or ""
 
 
-# Windows 上 Arm GNU Toolchain 常见安装根(用于 PATH 未配置时自动发现)
-_ARM_INSTALL_ROOTS = [
-    r"C:\Program Files (x86)\Arm",
-    r"C:\Program Files\Arm",
-    r"C:\Arm",
-    r"D:\Arm",
-]
+# Windows 上各工具常见安装根(用于 PATH 未配置时自动发现)
+_TOOL_INSTALL_ROOTS: dict[str, list[str]] = {
+    "arm-none-eabi-gcc": [
+        r"C:\Program Files (x86)\Arm", r"C:\Program Files\Arm",
+        r"C:\Arm", r"D:\Arm",
+    ],
+    "cmake": [r"C:\Program Files\CMake", r"C:\Program Files (x86)\CMake"],
+    "make": [r"C:\msys64\usr\bin", r"C:\Program Files (x86)\GnuWin32\bin",
+             r"C:\Program Files\GnuWin32\bin"],
+    "ninja": [r"C:\Program Files\ninja"],
+    "mingw32-make": [r"C:\msys64\mingw64\bin", r"C:\msys64\mingw32\bin"],
+}
+_EXE = ".exe" if __import__("os").name == "nt" else ""
 
 
-def find_toolchain_bin(configured: str = "") -> str:
-    """定位 arm-none-eabi-gcc 所在 bin 目录,供构建时加到 PATH(免去配系统 PATH)。
+def find_tool_bin(name: str, configured: str = "") -> str:
+    """定位某工具所在 bin 目录,供构建时加到 PATH(免去配系统 PATH)。
 
-    优先级:显式 configured > PATH > 常见安装目录递归探测 > ''。
+    优先级:显式 configured > PATH > 常见安装目录递归/直接探测 > ''。
     """
     import glob
     if configured:
-        cand = Path(configured)
-        if (cand / "arm-none-eabi-gcc.exe").exists() or (cand / "arm-none-eabi-gcc").exists():
-            return str(cand)
-    p = _which("arm-none-eabi-gcc")
+        c = Path(configured)
+        if (c / (name + _EXE)).exists():
+            return str(c)
+    p = _which(name)
     if p:
         return str(Path(p).parent)
-    for base in _ARM_INSTALL_ROOTS:
-        if Path(base).exists():
-            for exe in glob.glob(base + r"\**\bin\arm-none-eabi-gcc.exe", recursive=True):
-                return str(Path(exe).parent)
+    for base in _TOOL_INSTALL_ROOTS.get(name, []):
+        if not Path(base).exists():
+            continue
+        # base 直接就是 bin
+        direct = Path(base) / (name + _EXE)
+        if direct.exists():
+            return base
+        # 递归找 .../bin/name.exe
+        for exe in glob.glob(base + r"\**\bin\\" + name + _EXE, recursive=True):
+            return str(Path(exe).parent)
     return ""
+
+
+def find_toolchain_bin(configured: str = "") -> str:
+    """定位 arm-none-eabi-gcc 所在 bin 目录(语义保留)。"""
+    return find_tool_bin("arm-none-eabi-gcc", configured)
+
+
+def extra_path_dirs() -> list[str]:
+    """构建时应前置到 PATH 的全部 bin 目录(arm-gcc/cmake/make/ninja 等,去重)。"""
+    dirs: list[str] = []
+    for name in ("arm-none-eabi-gcc", "cmake", "make", "ninja", "mingw32-make"):
+        d = find_tool_bin(name)
+        if d and d not in dirs:
+            dirs.append(d)
+    return dirs
 
 
 def check_env() -> list[ToolCheck]:

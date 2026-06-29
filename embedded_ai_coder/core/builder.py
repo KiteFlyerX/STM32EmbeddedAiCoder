@@ -31,10 +31,21 @@ class MakeBuilder(Builder):
         self.toolchain_bin = toolchain_bin
 
     def _env_with_toolchain(self) -> dict:
-        """把 toolchain_bin 前置到 PATH(仅本次构建子进程)。"""
+        """把 arm-gcc/cmake/make 等 bin 前置到 PATH(仅本次构建子进程,免配系统 PATH)。"""
         env = os.environ.copy()
+        extra: list[str] = []
         if self.toolchain_bin:
-            env["PATH"] = self.toolchain_bin + os.pathsep + env.get("PATH", "")
+            extra.append(self.toolchain_bin)
+        try:
+            from ..preflight import extra_path_dirs
+            extra.extend(extra_path_dirs())
+        except Exception:  # noqa: BLE001
+            pass
+        # 去重后前置
+        seen: set[str] = set()
+        prepend = [d for d in extra if not (d in seen or seen.add(d))]
+        if prepend:
+            env["PATH"] = os.pathsep.join(prepend) + os.pathsep + env.get("PATH", "")
         return env
 
     def build(self) -> tuple[bool, str]:
