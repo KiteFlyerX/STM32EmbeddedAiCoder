@@ -123,6 +123,10 @@ def cmd_run(args: argparse.Namespace) -> int:
           f"dry-run={args.dry_run}")
     print(f"工程目录:{(config.get('project', {}) or {}).get('root', '(未配置)')}")
 
+    # 闭环前环境自检:缺关键工具(arm-gcc/pyOCD)写日志,不阻断(演示模式可继续)
+    from .preflight import log_warnings
+    log_warnings()
+
     orch.collector.open()
     try:
         results = orch.run(goal=args.goal or "修复串口日志中的 fault", max_iterations=max_iter)
@@ -177,6 +181,16 @@ def cmd_index(args: argparse.Namespace) -> int:
     ok, out = tokenbase_bridge.index(args.directory, force=args.force)
     print(out)
     return 0 if ok else 2
+
+
+def cmd_check_env(args: argparse.Namespace) -> int:
+    """环境自检:检测构建/烧录/定位工具链是否就绪,并给 Windows 安装提示。"""
+    from .preflight import check_env, format_report, log_warnings
+    checks = check_env()
+    print(format_report(checks))
+    log_warnings(checks)
+    missing = [c.name for c in checks if c.critical and not c.found]
+    return 2 if missing else 0
 
 
 def cmd_implement(args: argparse.Namespace) -> int:
@@ -272,6 +286,10 @@ def build_parser() -> argparse.ArgumentParser:
     pim.add_argument("--json", action="store_true", help="额外输出结果 JSON")
     pim.add_argument("-v", "--verbose", action="store_true")
     pim.set_defaults(func=cmd_implement)
+
+    pce = sub.add_parser("check-env", help="环境自检(构建/烧录工具链是否就绪)")
+    pce.add_argument("-v", "--verbose", action="store_true")
+    pce.set_defaults(func=cmd_check_env)
     return p
 
 
