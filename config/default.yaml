@@ -22,6 +22,7 @@ flasher:
 
 build:
   toolchain: arm-gcc    # arm-gcc | cubeide
+  toolchain_bin: ""     # arm-none-eabi-gcc 所在 bin 目录;留空则自动探测(免配系统 PATH)
 
 ai:
   provider: ""          # (待填 G-02) claude | openai | local

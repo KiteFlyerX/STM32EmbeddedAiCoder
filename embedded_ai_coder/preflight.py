@@ -15,6 +15,7 @@ import logging
 import shutil
 import importlib.util
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,35 @@ def _which(name: str) -> str:
     return shutil.which(name) or ""
 
 
+# Windows 上 Arm GNU Toolchain 常见安装根(用于 PATH 未配置时自动发现)
+_ARM_INSTALL_ROOTS = [
+    r"C:\Program Files (x86)\Arm",
+    r"C:\Program Files\Arm",
+    r"C:\Arm",
+    r"D:\Arm",
+]
+
+
+def find_toolchain_bin(configured: str = "") -> str:
+    """定位 arm-none-eabi-gcc 所在 bin 目录,供构建时加到 PATH(免去配系统 PATH)。
+
+    优先级:显式 configured > PATH > 常见安装目录递归探测 > ''。
+    """
+    import glob
+    if configured:
+        cand = Path(configured)
+        if (cand / "arm-none-eabi-gcc.exe").exists() or (cand / "arm-none-eabi-gcc").exists():
+            return str(cand)
+    p = _which("arm-none-eabi-gcc")
+    if p:
+        return str(Path(p).parent)
+    for base in _ARM_INSTALL_ROOTS:
+        if Path(base).exists():
+            for exe in glob.glob(base + r"\**\bin\arm-none-eabi-gcc.exe", recursive=True):
+                return str(Path(exe).parent)
+    return ""
+
+
 def check_env() -> list[ToolCheck]:
     """检测全部工具,返回 ToolCheck 列表。"""
     checks: list[ToolCheck] = []
@@ -47,7 +77,7 @@ def check_env() -> list[ToolCheck]:
 
     add("arm-none-eabi-gcc", "ARM 交叉编译器(编译 STM32 C)", True,
         "装 Arm GNU Toolchain(arm-gnu.toolchain.windows);加 bin 到 PATH",
-        lambda: _which("arm-none-eabi-gcc"))
+        lambda: find_toolchain_bin() or "")
     add("make", "构建驱动(Makefile 工程)", False,
         "MSYS2: pacman -S make;或 choco install make;或用 cmake 替代",
         lambda: _which("make"))
