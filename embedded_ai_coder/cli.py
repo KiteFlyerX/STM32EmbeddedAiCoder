@@ -212,6 +212,24 @@ def cmd_implement(args: argparse.Namespace) -> int:
     print(f"实现目标:{args.goal or '(据需求文档实现全部功能)'}")
     print(f"模型:{(config.get('ai', {}) or {}).get('model', '(未配置)')}")
 
+    # --deploy:生成 → 自动编译(自愈)→ 烧录 一条龙(需工程是可编译底座)
+    if getattr(args, "deploy", False):
+        from .core.orchestrator import make_orchestrator
+        on_step = _make_step_printer()
+        orch = make_orchestrator(config, on_step=on_step,
+                                 confirm_fn=(lambda msg: False))
+        out = orch.implement_and_deploy(goal=args.goal or "", scope=args.scope or "")
+        print("\n---------- 生成 + 部署结果 ----------")
+        print(out.get("summary", "") or "(无摘要)")
+        print(f"  文件:写 {out.get('written',0)} 个;"
+              f"编译={'通过' if out.get('build_ok') else '失败'}"
+              f"(自愈 {out.get('heal_attempts',0)} 轮);"
+              f"烧录={out.get('flashed')};{out.get('note','')}")
+        if not out.get("build_ok") and out.get("build_log"):
+            print("  编译日志尾部:")
+            print("    " + "\n    ".join(out["build_log"].splitlines()[-12:]))
+        return 0 if out.get("build_ok") else 1
+
     ai = make_ai_client(config)
     coder = CoderImpl(root)
     out = ai.implement_from_docs(goal=args.goal or "", scope=args.scope or "")
@@ -283,6 +301,8 @@ def build_parser() -> argparse.ArgumentParser:
     pim.add_argument("--goal", default="", help="实现目标(自然语言)")
     pim.add_argument("--scope", default="", help="范围/约束(可选)")
     pim.add_argument("--project", default="", help="工程根目录(覆盖 config.project.root)")
+    pim.add_argument("--deploy", action="store_true",
+                     help="生成后自动编译(自愈)+ 烧录一条龙(需工程为可编译底座)")
     pim.add_argument("--json", action="store_true", help="额外输出结果 JSON")
     pim.add_argument("-v", "--verbose", action="store_true")
     pim.set_defaults(func=cmd_implement)

@@ -217,24 +217,52 @@ class LoopWorker(QObject):
             written, skipped = (0, 0)
             if files:
                 written, skipped = orch.coder.write_files(files)
-            meta = out.get("meta", {}) or {}
-            self.implementResult.emit({
-                "summary": out.get("summary", ""),
-                "files": [{"path": f["path"], "reason": f.get("reason", ""),
-                           "chars": len(f.get("content", ""))} for f in files],
-                "written": written, "skipped": skipped,
-                "mock": meta.get("mock", False),
-                "error": meta.get("error", ""),
-                "tb_symbols": meta.get("tokenbase_symbols", []),
-                "tb_hits": sum(1 for e in (meta.get("tokenbase_echo", []) or [])
-                               if "未在 tokenbase" not in e and "exit_ok=True" in e),
-            })
+            self._emit_impl_result(out, files, written, skipped, deploy=False)
         except Exception as exc:  # noqa: BLE001
             logger.exception("implement 失败")
             self.implementResult.emit({
                 "summary": "", "files": [], "written": 0, "skipped": 0,
                 "mock": False, "error": f"{type(exc).__name__}: {exc}",
             })
+
+    @Slot(str)
+    def do_implement_and_deploy(self, goal: str) -> None:
+        """生成 → 自动编译(自愈)→ 烧录 一条龙(worker 线程)。"""
+        orch = self._ensure_orch()
+        if orch is None:
+            return
+        try:
+            out = orch.implement_and_deploy(goal=goal or "")
+            self._emit_impl_result(
+                {"summary": out.get("summary", ""), "meta": {
+                    "mock": out.get("mock", False),
+                    "tokenbase_symbols": out.get("tokenbase_symbols", []),
+                    "tokenbase_echo": [], "docs_echo": out.get("docs_echo", [])}},
+                out.get("files", []), out.get("written", 0), out.get("skipped", 0),
+                deploy=True, build_ok=out.get("build_ok"),
+                flashed=out.get("flashed"), note=out.get("note", ""))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("implement_and_deploy 失败")
+            self.implementResult.emit({
+                "summary": "", "files": [], "written": 0, "skipped": 0,
+                "mock": False, "error": f"{type(exc).__name__}: {exc}", "deploy": True,
+            })
+
+    def _emit_impl_result(self, out: dict, files: list, written: int, skipped: int,
+                          *, deploy: bool, build_ok=None, flashed=None, note="") -> None:
+        meta = out.get("meta", {}) or {}
+        self.implementResult.emit({
+            "summary": out.get("summary", ""),
+            "files": [{"path": f["path"], "reason": f.get("reason", ""),
+                       "chars": len(f.get("content", ""))} for f in (files or [])],
+            "written": written, "skipped": skipped,
+            "mock": meta.get("mock", False),
+            "error": meta.get("error", ""),
+            "tb_symbols": meta.get("tokenbase_symbols", []),
+            "tb_hits": sum(1 for e in (meta.get("tokenbase_echo", []) or [])
+                           if "未在 tokenbase" not in e and "exit_ok=True" in e),
+            "deploy": deploy, "build_ok": build_ok, "flashed": flashed, "note": note,
+        })
 
     # ---------- 独立串口监听(日志监控页,不跑闭环)----------
     @Slot(bool)

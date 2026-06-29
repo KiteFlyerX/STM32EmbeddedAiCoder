@@ -59,7 +59,9 @@ class AiCoderPage(PlaceholderPage):
         self.goalEdit.setPlaceholderText("实现目标,如:实现 SHT40 温湿度采集 + USART3 调试日志")
         implRow.addWidget(self.goalEdit, 1)
         self.btnImplement = PrimaryPushButton("🤖 实现", implCard)
+        self.btnDeploy = PushButton("🚀 实现并部署", implCard)
         implRow.addWidget(self.btnImplement)
+        implRow.addWidget(self.btnDeploy)
         il.addLayout(implRow)
         self.implLabel = BodyLabel("尚未实现。", implCard)
         self.implLabel.setWordWrap(True)
@@ -107,6 +109,7 @@ class AiCoderPage(PlaceholderPage):
         self.btnApply.clicked.connect(self._on_apply)
         self.btnRollback.clicked.connect(self._on_rollback)
         self.btnImplement.clicked.connect(self._on_implement)
+        self.btnDeploy.clicked.connect(self._on_deploy)
 
     # ---------- 回调 ----------
     def _on_patches(self, patches: list, diagnosis: str, mock: bool) -> None:
@@ -154,8 +157,17 @@ class AiCoderPage(PlaceholderPage):
         InfoBar.information("已提交", "AI 实现任务已在后台执行,完成后会在此提示。",
                             parent=self.window(), duration=3000)
 
+    def _on_deploy(self) -> None:
+        goal = self.goalEdit.text().strip()
+        self.implLabel.setText("⟳ 正在生成工程代码 → 自动编译(自愈)→ 烧录… 全程无人,请稍候。")
+        self.btnDeploy.setEnabled(False)
+        self.hub.implement_and_deploy_now(goal)
+        InfoBar.information("已提交", "生成+部署流水线已在后台执行(生成→编译→烧录)。",
+                            parent=self.window(), duration=3000)
+
     def _on_implement_result(self, payload: dict) -> None:
         self.btnImplement.setEnabled(True)
+        self.btnDeploy.setEnabled(True)
         err = payload.get("error")
         if err:
             self.implLabel.setText(f"❌ 实现失败:{err}")
@@ -171,9 +183,18 @@ class AiCoderPage(PlaceholderPage):
         tb_note = f"<br>　🔁 已复用工程 {tb_hits} 个已有签名(TokenBase)" if tb_hits else ""
         file_lines = "".join(f"<br>　· {f.get('path')} ({f.get('chars', 0)} 字符) {f.get('reason', '')}"
                              for f in files)
+        # 部署模式:追加编译/烧录状态
+        deploy_line = ""
+        if payload.get("deploy"):
+            build_ok = payload.get("build_ok")
+            flashed = payload.get("flashed")
+            bs = "✓编译通过" if build_ok else "✗编译失败"
+            fs = {True: "✓已烧录", False: "✗烧录失败", None: "—未烧录"}.get(flashed, "—")
+            deploy_line = f"<br><b>部署:{bs}　{fs}</b>　{payload.get('note', '')}"
         self.implLabel.setText(
             f"{tag}摘要:{summary}{tb_note}<br>"
             f"<b>写入 {written} 个文件(跳过 {skipped})</b>{file_lines or '<br>　(无文件)'}"
+            f"{deploy_line}"
         )
         msg = (f"已生成 {len(files)} 个文件,写入 {written} 个。" if files
                else "AI 未产出文件。")

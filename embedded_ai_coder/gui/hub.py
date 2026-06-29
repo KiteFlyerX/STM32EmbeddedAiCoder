@@ -50,6 +50,7 @@ class EngineHub(QObject):
     _applyRequested = Signal(dict)
     _rollbackRequested = Signal()
     _implementRequested = Signal(str)
+    _implementDeployRequested = Signal(str)
     _monitorStartRequested = Signal(bool)
     _monitorStopRequested = Signal()
 
@@ -69,6 +70,7 @@ class EngineHub(QObject):
         self._applyRequested.connect(self.worker.do_apply)
         self._rollbackRequested.connect(self.worker.do_rollback)
         self._implementRequested.connect(self.worker.do_implement)
+        self._implementDeployRequested.connect(self.worker.do_implement_and_deploy)
         self._monitorStartRequested.connect(self.worker.do_start_monitor)
         self._monitorStopRequested.connect(self.worker.do_stop_monitor)
 
@@ -120,6 +122,10 @@ class EngineHub(QObject):
     def implement_now(self, goal: str) -> None:
         """据原理图+需求文档,用 AI 实现产品固件(排队到 worker 线程)。"""
         self._implementRequested.emit(goal)
+
+    def implement_and_deploy_now(self, goal: str) -> None:
+        """生成 → 自动编译(自愈)→ 烧录 一条龙(排队到 worker 线程)。"""
+        self._implementDeployRequested.emit(goal)
 
     def start_monitor(self, demo: bool) -> None:
         """开启持续串口监听(独立于 AI 闭环)。"""

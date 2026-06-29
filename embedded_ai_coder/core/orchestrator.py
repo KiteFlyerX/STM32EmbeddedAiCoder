@@ -221,28 +221,9 @@ class OrchestratorImpl(Orchestrator):
             res.note = "补丁均未命中文件"
             return res
 
-        # 5) 构建(可选)+ 编译自愈(F-08):失败则把编译错误回喂 AI 改码重编,达上限止
-        build_ok, build_log = self.builder.build()
+        # 5) 构建 + 编译自愈(F-08)
+        build_ok, build_log, heal_attempts = self._build_with_heal(fragment, goal)
         res.build_ok = build_ok
-        heal_attempts = 0
-        max_heal = self.build_heal_retries if self.auto_build else 0
-        while not build_ok and heal_attempts < max_heal:
-            heal_attempts += 1
-            self._emit("build_heal", {"attempt": heal_attempts, "max": max_heal,
-                                      "log_tail": build_log[-300:]})
-            heal_out = self.ai_client.diagnose_and_patch(
-                log_context=fragment, source_context="", goal=goal,
-                build_errors=build_log)
-            heal_patches = heal_out.get("patches", [])
-            if not heal_patches:
-                res.note = f"编译自愈:第 {heal_attempts} 轮 AI 未给补丁,放弃"
-                break
-            ok_n, _fail_n = self.coder.apply_many(heal_patches)
-            if ok_n == 0:
-                res.note = f"编译自愈:第 {heal_attempts} 轮补丁未命中,放弃"
-                break
-            build_ok, build_log = self.builder.build()
-            res.build_ok = build_ok
         self._emit("built", {"ok": build_ok, "log_tail": build_log[-400:],
                              "heal_attempts": heal_attempts})
         if not build_ok:
@@ -275,6 +256,74 @@ class OrchestratorImpl(Orchestrator):
         res.verified = None
         res.note = "已烧录,等待下一轮复采验证"
         return res
+
+    # ---------- 构建自愈(复用)----------
+    def _build_with_heal(self, fragment: str, goal: str) -> tuple[bool, str, int]:
+        """构建 + 编译自愈(失败回喂 AI 改码重编)。返回 (ok, log, heal_attempts)。"""
+        build_ok, build_log = self.builder.build()
+        heal_attempts = 0
+        max_heal = self.build_heal_retries if self.auto_build else 0
+        while not build_ok and heal_attempts < max_heal:
+            heal_attempts += 1
+            self._emit("build_heal", {"attempt": heal_attempts, "max": max_heal,
+                                      "log_tail": build_log[-300:]})
+            heal_out = self.ai_client.diagnose_and_patch(
+                log_context=fragment, source_context="", goal=goal,
+                build_errors=build_log)
+            heal_patches = heal_out.get("patches", [])
+            if not heal_patches:
+                logger.warning("编译自愈:第 %d 轮 AI 未给补丁,放弃", heal_attempts)
+                break
+            ok_n, _fail = self.coder.apply_many(heal_patches)
+            if ok_n == 0:
+                logger.warning("编译自愈:第 %d 轮补丁未命中,放弃", heal_attempts)
+                break
+            build_ok, build_log = self.builder.build()
+        return build_ok, build_log, heal_attempts
+
+    # ---------- 据文档实现 + 部署(生成→编译→烧录一条龙)----------
+    def implement_and_deploy(self, goal: str, scope: str = "") -> dict:
+        """据原理图+需求文档,AI 生成工程代码并写回 → 自动编译(自愈)→ 烧录。
+
+        前提:工程根是可编译底座(CubeMX 工程,含 HAL/启动文件/链接脚本)。
+        AI 在其上生成应用/驱动;编译错自动回喂 AI 自愈;通过则按 firmware 烧录。
+        返回 {summary, files, written, build_ok, flashed, note, ...}。
+        """
+        self._emit("impl_start", {"goal": goal})
+        out = self.ai_client.implement_from_docs(goal=goal, scope=scope)
+        files = out.get("files", [])
+        meta = out.get("meta", {}) or {}
+        written = skipped = 0
+        if files:
+            written, skipped = self.coder.write_files(files)
+        self._emit("impl_written", {"files": len(files), "written": written,
+                                    "mock": meta.get("mock", False)})
+
+        build_ok, build_log, heal = self._build_with_heal("", goal)
+        self._emit("built", {"ok": build_ok, "log_tail": build_log[-400:],
+                             "heal_attempts": heal})
+
+        flashed = None
+        fw = getattr(self.flasher, "firmware", "") or ""
+        note = ""
+        if not build_ok:
+            note = f"编译未通过(自愈 {heal} 轮),跳过烧录"
+        elif not fw:
+            note = "未配置 flasher.firmware,跳过烧录"
+        elif not self.auto_flash:
+            note = "auto_flash 关闭,跳过烧录"
+        else:
+            flashed = self.flasher.flash(fw)
+            self._emit("flashed", {"ok": bool(flashed)})
+            note = "已烧录" if flashed else "烧录未成功(见日志)"
+        return {
+            "summary": out.get("summary", ""), "files": files,
+            "written": written, "skipped": skipped, "mock": meta.get("mock", False),
+            "build_ok": build_ok, "flashed": flashed,
+            "build_log": build_log[-1000:], "heal_attempts": heal, "note": note,
+            "docs_echo": meta.get("docs_echo", []),
+            "tokenbase_symbols": meta.get("tokenbase_symbols", []),
+        }
 
     # ---------- 采集 ----------
     def _collect(self) -> list[str]:
