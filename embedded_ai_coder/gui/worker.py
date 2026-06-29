@@ -62,6 +62,7 @@ class LoopWorker(QObject):
     progress = Signal(str, dict)          # 对应 orchestrator on_step(stage, payload)
     logLine = Signal(str)                 # 实时日志行(collector 线程发射,跨线程安全)
     stateChanged = Signal(str)            # idle|running|paused|stopping|done|error
+    monitorStateChanged = Signal(str)     # 监听状态: idle|monitoring|error
     iterationDone = Signal(dict)          # 单轮结果(序列化)
     aiPatches = Signal(list, str, bool)   # (patches, diagnosis, mock) —— 供 AI 编码页
     error = Signal(str)
@@ -81,6 +82,7 @@ class LoopWorker(QObject):
         super().__init__(parent)
         self._config_getter = config_getter        # 返回当前有效 config(hub 持有,可被设置页更新)
         self._orch = None
+        self._monitor = None              # 独立串口监听器(日志监控页用,不跑闭环)
         self._pause_event = threading.Event()
         self._pause_event.set()                    # set=运行,clear=暂停
         self._running = False
@@ -233,6 +235,42 @@ class LoopWorker(QObject):
                 "summary": "", "files": [], "written": 0, "skipped": 0,
                 "mock": False, "error": f"{type(exc).__name__}: {exc}",
             })
+
+    # ---------- 独立串口监听(日志监控页,不跑闭环)----------
+    @Slot(bool)
+    def do_start_monitor(self, demo: bool) -> None:
+        """开启持续串口监听:每读到一行经 logLine 流到日志页。不依赖 AI 闭环。"""
+        if self._monitor is not None:
+            return
+        from ..core.collector import SerialCollector, make_collector
+        config = dict(self._config_getter())
+        on_line = lambda line: self.logLine.emit(line)  # noqa: E731
+        try:
+            if demo:
+                demo_log = (config.get("collector", {}) or {}).get("demo_log") or str(_DEMO_LOG_DEFAULT)
+                coll = SerialCollector(port="(replay)", baudrate=0,
+                                       from_file=demo_log, on_line=on_line)
+            else:
+                coll = make_collector(config, on_line=on_line)
+            coll.open()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("打开监听失败")
+            self.error.emit(f"打开监听失败:{exc}")
+            self.monitorStateChanged.emit("error")
+            return
+        self._monitor = coll
+        self.monitorStateChanged.emit("monitoring")
+
+    @Slot()
+    def do_stop_monitor(self) -> None:
+        """停止串口监听。"""
+        if self._monitor is not None:
+            try:
+                self._monitor.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._monitor = None
+        self.monitorStateChanged.emit("idle")
 
     # ---------- 内部 ----------
     def _ensure_orch(self):

@@ -31,6 +31,7 @@ class EngineHub(QObject):
     progress = Signal(str, dict)
     logLine = Signal(str)
     stateChanged = Signal(str)
+    monitorStateChanged = Signal(str)     # 串口监听状态: idle|monitoring|error
     iterationDone = Signal(dict)
     aiPatches = Signal(list, str, bool)      # patches, diagnosis, mock
     error = Signal(str)
@@ -49,6 +50,8 @@ class EngineHub(QObject):
     _applyRequested = Signal(dict)
     _rollbackRequested = Signal()
     _implementRequested = Signal(str)
+    _monitorStartRequested = Signal(bool)
+    _monitorStopRequested = Signal()
 
     def __init__(self, config: dict[str, Any], parent: Optional[QObject] = None):
         super().__init__(parent)
@@ -66,11 +69,14 @@ class EngineHub(QObject):
         self._applyRequested.connect(self.worker.do_apply)
         self._rollbackRequested.connect(self.worker.do_rollback)
         self._implementRequested.connect(self.worker.do_implement)
+        self._monitorStartRequested.connect(self.worker.do_start_monitor)
+        self._monitorStopRequested.connect(self.worker.do_stop_monitor)
 
         # worker 信号 → hub 信号(转发,跨线程回到 GUI 线程)
         self.worker.progress.connect(self.progress)
         self.worker.logLine.connect(self.logLine)
         self.worker.stateChanged.connect(self.stateChanged)
+        self.worker.monitorStateChanged.connect(self.monitorStateChanged)
         self.worker.iterationDone.connect(self.iterationDone)
         self.worker.aiPatches.connect(self.aiPatches)
         self.worker.error.connect(self.error)
@@ -114,6 +120,14 @@ class EngineHub(QObject):
     def implement_now(self, goal: str) -> None:
         """据原理图+需求文档,用 AI 实现产品固件(排队到 worker 线程)。"""
         self._implementRequested.emit(goal)
+
+    def start_monitor(self, demo: bool) -> None:
+        """开启持续串口监听(独立于 AI 闭环)。"""
+        self._monitorStartRequested.emit(demo)
+
+    def stop_monitor(self) -> None:
+        """停止串口监听。"""
+        self._monitorStopRequested.emit()
 
     # ---------- 生命周期 ----------
     def shutdown(self, timeout_ms: int = 10000) -> None:

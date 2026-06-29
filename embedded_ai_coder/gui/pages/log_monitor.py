@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QHBoxLayout
 
-from qfluentwidgets import BodyLabel, LineEdit, PushButton, SwitchButton
+from qfluentwidgets import (BodyLabel, LineEdit, PrimaryPushButton, PushButton,
+                            StrongBodyLabel, SwitchButton)
 
 from ..widgets import LiveLogView
 from .base import PlaceholderPage
@@ -25,6 +26,23 @@ class LogMonitorPage(PlaceholderPage):
         )
 
     def _build_content(self, layout) -> None:
+        # 监听控制:不跑 AI 闭环也能持续读串口
+        monBar = QHBoxLayout()
+        self.btnStartMon = PrimaryPushButton("▶ 开始监听", self)
+        self.btnStopMon = PushButton("⏹ 停止监听", self)
+        self.btnStopMon.setEnabled(False)
+        self.demoSwitch = SwitchButton(self)
+        self.demoSwitch.setText("演示回放")
+        self.monStatus = StrongBodyLabel("● 未监听", self)
+        monBar.addWidget(self.btnStartMon)
+        monBar.addWidget(self.btnStopMon)
+        monBar.addWidget(BodyLabel("演示回放:", self))
+        monBar.addWidget(self.demoSwitch)
+        monBar.addStretch(1)
+        monBar.addWidget(self.monStatus)
+        layout.addLayout(monBar)
+
+        # 过滤/清空/滚动
         bar = QHBoxLayout()
         self.clearBtn = PushButton("清空", self)
         self.scrollSwitch = SwitchButton(self)
@@ -43,6 +61,26 @@ class LogMonitorPage(PlaceholderPage):
 
         # 绑定
         self.hub.logLine.connect(self.liveLog.append_line)
+        self.hub.monitorStateChanged.connect(self._on_monitor_state)
         self.clearBtn.clicked.connect(self.liveLog.clear_log)
         self.scrollSwitch.checkedChanged.connect(self.liveLog.set_autoscroll)
         self.filterEdit.textChanged.connect(self.liveLog.set_filter)
+        self.btnStartMon.clicked.connect(
+            lambda: self.hub.start_monitor(self.demoSwitch.isChecked()))
+        self.btnStopMon.clicked.connect(self.hub.stop_monitor)
+
+    def _on_monitor_state(self, state: str) -> None:
+        monitoring = state == "monitoring"
+        self.btnStartMon.setEnabled(not monitoring)
+        self.btnStopMon.setEnabled(monitoring)
+        if state == "monitoring":
+            port = "(演示回放)" if self.demoSwitch.isChecked() else self._port_text()
+            self.monStatus.setText(f"● 监听中:{port}")
+        elif state == "error":
+            self.monStatus.setText("● 监听失败(见提示/日志)")
+        else:
+            self.monStatus.setText("● 未监听")
+
+    def _port_text(self) -> str:
+        ser = (self.hub.config.get("collector", {}) or {}).get("serial", {}) or {}
+        return f"{ser.get('port','?')}@{ser.get('baudrate','?')}"
