@@ -6,6 +6,7 @@ project:
   root: ""              # (待填 S-01) STM32 工程根目录,如 E:/work/my_stm32
   chip: ""              # (待填 S-01) 如 STM32H743 / STM32F407
   build_command: ""     # (待填 S-02) 如 make ; 或 cmake --build build
+  sdk_path: ""          # (F-25) 官方 SDK 包根,如 E:/AiTool/STM32_SDK/STM32Cube_FW_G0_V1.6.0;一键生成时从中抽取启动/链接/HAL 配置拼出可编译骨架
 
 collector:
   channel: uart         # (待填 S-03) uart | rtt
@@ -29,6 +30,9 @@ ai:
   model: ""
   api_key: ""           # 建议放 config/local.yaml 或环境变量,勿提交
   base_url: ""
+  vision_model: ""      # (F-25) 视觉模型(看原理图 PDF),如 glm-4v / gpt-4o;空=纯走引脚表,不尝试视觉
+  vision_base_url: ""   # 可选,空=复用 base_url
+  vision_api_key: ""    # 可选,空=复用 api_key
 
 loop:
   max_iterations: 10    # 最大自动迭代轮数
@@ -41,6 +45,7 @@ loop:
 docs:
   schematics: []        # 原理图路径(图片 png/jpg 优先;pdf 视觉需可选 pymupdf)
   requirements: []      # 需求文档(md/txt/docx;pdf 仅记录元信息)
+  pinmap: ""            # (F-25) 结构化引脚表 .md(主路径 + 视觉兜底校验)
   vision: true          # 原理图走多模态视觉(需模型支持 image_url;纯文本模型请置 false)
   max_images: 4         # 单轮最多随附原理图图片数(控成本)
   max_image_mb: 5       # 单张图片大小上限(MB),超过跳过

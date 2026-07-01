@@ -51,6 +51,7 @@ class DocsConfig:
     """docs 段配置。"""
     schematics: list[str] = field(default_factory=list)     # 原理图路径
     requirements: list[str] = field(default_factory=list)   # 需求文档路径
+    pinmap: str = ""               # F-25:结构化引脚表 .md(主路径 + 视觉兜底校验)
     vision: bool = True            # 原理图走多模态视觉(需模型支持 image_url)
     max_images: int = 4            # 单轮最多随附原理图图片数(控成本)
     max_image_mb: float = 5.0      # 单张图片大小上限(MB),超过跳过
@@ -75,6 +76,7 @@ def make_docs_config(config: dict) -> DocsConfig:
     return DocsConfig(
         schematics=list(docs.get("schematics") or []),
         requirements=list(docs.get("requirements") or []),
+        pinmap=docs.get("pinmap", "") or "",
         vision=bool(docs.get("vision", True)),
         max_images=int(docs.get("max_images", 4)),
         max_image_mb=float(docs.get("max_image_mb", 5.0)),
@@ -268,7 +270,23 @@ class DocsContextReader:
 
         if not items:
             echo.append("(未配置 docs.schematics / docs.requirements,无预读文档)")
+        # 引脚表(F-25 主路径文本,独立于 schematics/requirements)
+        if (self.cfg.pinmap or "").strip():
+            pm = self._read_pinmap_text()
+            echo.append(f"pinmap:{Path(self.cfg.pinmap).name} -> "
+                        f"{'文本' if pm else '空'} ({len(pm)}字符)")
         return items, echo
+
+    def _read_pinmap_text(self) -> str:
+        """读取结构化引脚表 .md(F-25 主路径文本)。空配置/读失败返回 ''。"""
+        p = (self.cfg.pinmap or "").strip()
+        if not p:
+            return ""
+        try:
+            text, _note = extract_text_file(p)
+        except Exception:  # noqa: BLE001
+            return ""
+        return (text or "").strip()
 
     # ---------- 单文件 ----------
     def _read_one(self, path: str, kind: str, *, force: bool) -> DocItem:
@@ -343,6 +361,13 @@ class DocsContextReader:
         used = 0
         budget = self.cfg.max_chars_total
         any_text = False
+        # 引脚表优先置顶(F-25 主路径:视觉模型看不到原理图时,引脚信息仍在上文)
+        pm = self._read_pinmap_text()
+        if pm:
+            seg = "## 引脚表(用户校验,优先遵循)\n" + pm
+            blocks.append(seg)
+            used += len(seg) + 1
+            any_text = True
         for it in items:
             label = f"{'需求文档' if it.kind == 'requirement' else '原理图'} {Path(it.path).name}"
             if it.role == "image":

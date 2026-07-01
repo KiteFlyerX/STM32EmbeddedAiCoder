@@ -104,6 +104,9 @@ class AiConfig:
     max_symbols: int = 8           # 单轮最多 query 的符号数(控 token)
     max_tokens: int = 8192         # 生成上限(推理模型需较大,否则 content 被截断为空)
     docs: Optional[DocsConfig] = None   # 项目文档预读配置(原理图/需求文档)
+    vision_model: str = ""         # F-25:视觉模型(看原理图 PDF);空=不尝试视觉,纯走引脚表
+    vision_base_url: str = ""      # 视觉端点,空=复用 base_url
+    vision_api_key: str = ""       # 视觉 key,空=复用 api_key
 
 
 def make_ai_config(config: dict) -> AiConfig:
@@ -119,6 +122,9 @@ def make_ai_config(config: dict) -> AiConfig:
         max_symbols=int(ai.get("max_symbols", 8)),
         max_tokens=int(ai.get("max_tokens", 8192)),
         docs=make_docs_config(config),
+        vision_model=ai.get("vision_model", ""),
+        vision_base_url=ai.get("vision_base_url", ""),
+        vision_api_key=ai.get("vision_api_key", ""),
     )
 
 
