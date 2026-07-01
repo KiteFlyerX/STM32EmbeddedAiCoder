@@ -117,7 +117,7 @@ class DashboardPage(QWidget):
         logCard = ElevatedCardWidget(self)
         logLayout = QVBoxLayout(logCard)
         logLayout.setContentsMargins(16, 12, 16, 16)
-        logLayout.addWidget(SubtitleLabel("实时日志", logCard))
+        logLayout.addWidget(SubtitleLabel("实时日志(AI 工作过程)", logCard))
         self.liveLog = LiveLogView(logCard)
         logLayout.addWidget(self.liveLog, 1)
         root.addWidget(logCard, 3)
@@ -141,7 +141,6 @@ class DashboardPage(QWidget):
         self.maxSpin.valueChanged.connect(lambda v: self._on_max_changed(v))
 
         hub.progress.connect(self._on_progress)
-        hub.logLine.connect(self.liveLog.append_line)
         hub.stateChanged.connect(self._on_state)
         hub.error.connect(self._on_error)
 
@@ -195,7 +194,79 @@ class DashboardPage(QWidget):
         if state == "done":
             self._flash_info("闭环结束", "所有迭代已完成。", InfoBarPosition.TOP_RIGHT)
 
+    def _fmt_stage(self, stage: str, payload: dict) -> str | None:
+        """把一个 progress 事件格式化成实时日志一行;返回 None 表示不记录。"""
+        from datetime import datetime
+        t = datetime.now().strftime("%H:%M:%S")
+
+        def ln(s: str) -> str:
+            return f"[{t}] {s}"
+
+        # ---- M1 闭环 ----
+        if stage == "iteration_start":
+            return ln(f"▶ 轮次 {payload.get('iteration', 0)} 开始")
+        if stage == "collected":
+            return ln(f"   采集 {payload.get('lines', 0)} 行串口日志")
+        if stage == "filtered":
+            return ln(f"   过滤 fault:{'命中' if payload.get('hit') else '未命中'}"
+                      f"({payload.get('fragment_len', 0)} 字符)")
+        if stage == "ai_done":
+            diag = (payload.get("diagnosis") or "—").strip().splitlines()[0][:80]
+            mock = " [mock]" if payload.get("mock") else ""
+            return ln(f"   AI 诊断:{diag}{mock}(补丁 {payload.get('patches', 0)})")
+        if stage == "coded":
+            return ln(f"   回写:应用 {payload.get('applied', 0)} / 失败 {payload.get('failed', 0)}")
+        if stage == "built":
+            return ln("   编译 ✓ 通过" if payload.get("ok") else "   编译 ✗ 失败")
+        if stage == "build_heal":
+            return ln(f"   编译失败,自愈第 {payload.get('attempt')}/{payload.get('max')} 轮")
+        if stage == "flashed":
+            return ln("   烧录 ✓" if payload.get("ok") else "   烧录 ✗/跳过")
+        if stage == "verified":
+            ok = payload.get("verified")
+            return ln(f"   验证:{'✓ fault 消失' if ok is True else '✗ 仍存在' if ok is False else '待复采'}")
+        if stage == "stop":
+            return ln(f"■ 停止:{payload.get('reason', '')}")
+        if stage == "finish":
+            return ln(f"■ 结束(共 {payload.get('iterations', '')} 轮)")
+        # ---- F-25 一键生成整项目 ----
+        if stage == "proj_start":
+            return ln(f"🏗 一键生成整项目:{payload.get('goal', '')}")
+        if stage == "proj_design":
+            mods = payload.get("modules") or []
+            return ln(f"   ① 架构设计:{payload.get('status', '')}"
+                      + (f" → 模块 {', '.join(mods)}" if mods else ""))
+        if stage == "proj_scaffold":
+            return ln(f"   ② 生成工程骨架:{payload.get('status', '')} "
+                      f"写入 {payload.get('written', 0)} 文件")
+        if stage.startswith("proj_module_"):
+            name = stage.split("proj_module_", 1)[1]
+            st = payload.get("status", "")
+            extra = (f" {payload.get('files', '')} 文件" if st == "done"
+                     else f" {payload.get('error', '')}" if st == "failed" else "")
+            return ln(f"   ③ 生成模块 {name}:{st}{extra}")
+        if stage == "proj_integrate":
+            return ln(f"   ④ 主循环+状态机集成:{payload.get('status', '')} "
+                      f"写入 {payload.get('written', 0)} 文件")
+        if stage == "proj_build_heal":
+            if payload.get("status") == "done":
+                ok = payload.get("build_ok")
+                heal = payload.get("heal_attempts", 0)
+                return ln(f"   ⑤ 编译:{'✓通过' if ok else '✗失败(自愈 ' + str(heal) + ' 轮)'}")
+            return ln("   ⑤ 编译自愈中…")
+        if stage == "proj_error":
+            return ln(f"   ✗ 异常:{payload.get('error', '')}  已回滚 {payload.get('rolled_back', 0)} 项")
+        # ---- implement_and_deploy ----
+        if stage == "impl_start":
+            return ln("🚀 实现并部署:开始")
+        if stage == "impl_written":
+            return ln(f"   生成 {payload.get('files', 0)} 文件,写入 {payload.get('written', 0)}")
+        return None
+
     def _on_progress(self, stage: str, payload: dict) -> None:
+        txt = self._fmt_stage(stage, payload)
+        if txt:
+            self.liveLog.append_line(txt)
         if stage == "iteration_start":
             i = payload.get("iteration", 0)
             self.cardIter.setValue(f"{i} / {self._max_iter}")
