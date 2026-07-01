@@ -261,29 +261,14 @@ class OrchestratorImpl(Orchestrator):
         res.note = "已烧录,等待下一轮复采验证"
         return res
 
-    # ---------- 构建自愈(复用)----------
+    # ---------- 构建自愈(委托共享函数,与五阶段编排共用)----------
     def _build_with_heal(self, fragment: str, goal: str) -> tuple[bool, str, int]:
-        """构建 + 编译自愈(失败回喂 AI 改码重编)。返回 (ok, log, heal_attempts)。"""
-        build_ok, build_log = self.builder.build()
-        heal_attempts = 0
+        """构建 + 编译自愈。委托 core.build_heal.build_with_heal。"""
+        from .build_heal import build_with_heal
         max_heal = self.build_heal_retries if self.auto_build else 0
-        while not build_ok and heal_attempts < max_heal:
-            heal_attempts += 1
-            self._emit("build_heal", {"attempt": heal_attempts, "max": max_heal,
-                                      "log_tail": build_log[-300:]})
-            heal_out = self.ai_client.diagnose_and_patch(
-                log_context=fragment, source_context="", goal=goal,
-                build_errors=build_log)
-            heal_patches = heal_out.get("patches", [])
-            if not heal_patches:
-                logger.warning("编译自愈:第 %d 轮 AI 未给补丁,放弃", heal_attempts)
-                break
-            ok_n, _fail = self.coder.apply_many(heal_patches)
-            if ok_n == 0:
-                logger.warning("编译自愈:第 %d 轮补丁未命中,放弃", heal_attempts)
-                break
-            build_ok, build_log = self.builder.build()
-        return build_ok, build_log, heal_attempts
+        return build_with_heal(self.builder, self.ai_client, self.coder, goal,
+                               max_retries=max_heal, fragment=fragment,
+                               on_step=self._emit)
 
     # ---------- 据文档实现 + 部署(生成→编译→烧录一条龙)----------
     def implement_and_deploy(self, goal: str, scope: str = "") -> dict:
