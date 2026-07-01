@@ -92,6 +92,60 @@ IMPLEMENT_SYSTEM_PROMPT = (
 )
 
 
+# ---------- F-25 五阶段一键生成:各阶段系统提示词 ----------
+ARCH_SYSTEM_PROMPT = (
+    "你是一名资深 STM32 嵌入式系统架构师。输入:产品目标 + 【引脚表(结构化,用户已校验,优先遵循)】"
+    "+ 需求文档(可选)+ 原理图理解(可选,由视觉模型给出)。请给出整产品固件的架构设计。\n\n"
+    "输出严格 JSON(不要 markdown 包裹,不要前言):\n"
+    '  {"summary":"本次架构一两句话",\n'
+    '   "hal_modules":["gpio","rcc","cortex","pwr","dma","i2c","uart",...],\n'
+    '   "pin_assign":[{"signal":"I2C1_SCL","port":"PB6","function":"I2C1_SCL","module":"eeprom","note":""}],\n'
+    '   "modules":[{"name":"eeprom","purpose":"铁电存储读写",'
+    '"peripherals":[{"type":"i2c","instance":"1"}],"deps":[],'
+    '"api":["uint8_t eeprom_read(uint16_t addr, uint8_t *buf, uint16_t len)"],'
+    '"files":[{"path":"Drivers/BSP/eeprom.c","role":"impl"},'
+    '{"path":"Drivers/BSP/eeprom.h","role":"hdr"}]}],\n'
+    '   "state_machine":{"initial":"IDLE","events":["EVT_CARD","EVT_TIMEOUT"],'
+    '"states":[{"name":"IDLE","entry":"led_idle()","exit":"",'
+    '"transitions":[{"to":"RUN","event":"EVT_CARD","guard":""}]}]},\n'
+    '   "tasks":[{"module":"eeprom","order":1}]}\n'
+    "规则:\n"
+    "- pin_assign 必须与输入引脚表一致,不得臆造引脚/端口。\n"
+    "- 模块单一职责、可独立编译;每个模块给出对外 api 函数签名(供阶段④集成调用)。\n"
+    "- 状态机用事件驱动,列出全部状态/事件/迁移。\n"
+    "- tasks 给出阶段③逐模块生成的顺序(被依赖的靠前)。"
+)
+
+MODULE_SYSTEM_PROMPT = (
+    "你是一名资深 STM32 HAL 驱动工程师。输入:单个模块规格(name/purpose/peripherals/api/files)"
+    "+ 全局 pin_assign + 引脚表 + 该模块涉及的 HAL 句柄上下文。请实现该模块完整 .c/.h"
+    "(STM32 HAL 风格,可直接放入工程编译)。\n\n"
+    "输出严格 JSON:\n"
+    '  {"summary":"该模块实现一两句",\n'
+    '   "files":[{"path":"<与 module.files[].path 一致>","content":"完整源码","reason":"职责"}]}\n'
+    "规则:\n"
+    "- 路径必须匹配 module.files[].path;content 是完整源码,保留缩进换行,不要 ``` 包裹。\n"
+    "- 用 HAL API;外设底层初始化(GPIO/时钟/复用/NVIC)写在 stm32g0xx_hal_msp.c 的对应 "
+    "HAL_xxx_MspInit 里(可只给本模块需补充的 MspInit 片段并注明),驱动文件只调 HAL_xxx_Init。\n"
+    "- 复用引脚表里的 port/function,不要臆造引脚。"
+)
+
+INTEGRATE_SYSTEM_PROMPT = (
+    "你是一名资深 STM32 主循环集成工程师。输入:状态机定义 + 各模块对外 API + 引脚表。"
+    "请生成主循环与状态机调度代码,把各模块串成可运行的产品固件。\n\n"
+    "输出严格 JSON:\n"
+    '  {"summary":"集成方案一两句","files":[\n'
+    '    {"path":"Core/Src/main.c","content":"完整 main.c",'
+    '"reason":"HAL_Init/SystemClock_Config/各 MX_*_Init/状态机 init + while(1) 调 fsm_tick()"},\n'
+    '    {"path":"Core/Src/state_machine.c","content":"状态机实现","reason":"switch-case 或函数指针表"},\n'
+    '    {"path":"Core/Inc/state_machine.h","content":"状态机接口","reason":"事件/状态枚举与 fsm_tick 声明"}]}\n'
+    "规则:\n"
+    "- main.c 整文件输出(覆盖 scaffold 占位骨架);保留 SystemClock_Config/Error_Handler。\n"
+    "- 事件由各模块中断/轮询产生并注入事件队列;状态机 fsm_tick() 在主循环调用。\n"
+    "- 调用各模块 api 时用其真实签名;不要臆造函数名。"
+)
+
+
 @dataclass
 class AiConfig:
     """AI 段配置。"""
@@ -300,6 +354,219 @@ class AiClientImpl(AiClient):
                             'int sht40_read(float *temp, float *rh) { (void)temp; (void)rh; return 0; }\n'),
                 "reason": "示意:SHT40 温湿度读取骨架",
             }],
+            "meta": {"mock": True},
+        }
+
+    # ---------- F-25 五阶段一键生成 ----------
+    def design_architecture(self, *, goal: str, pinmap_text: str = "",
+                            modules_hint: str = "", docs_text: str = "",
+                            use_vision: bool = True) -> dict:
+        """阶段①:据目标+引脚表(+需求/原理图视觉)出架构设计 JSON。
+        返回 {summary, hal_modules, pin_assign, modules[], state_machine, tasks, meta}。
+        无 key 走 mock。视觉(vision_model)失败自动退回纯引脚表。"""
+        vision_block = ""
+        if use_vision and self.cfg.vision_model:
+            try:
+                _docs_text, img_urls, _echo = self._gather_docs()
+                if img_urls:
+                    vision_block = "\n# 原理图理解(视觉模型识别)\n" + self._call_vision(
+                        "请识别这张 STM32 原理图的 MCU 型号、引脚分配、外设连接、关键元件,"
+                        "用结构化文本输出(供架构设计参考)。", img_urls)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("视觉理解失败,退回纯引脚表:%s", exc)
+                vision_block = ""
+        if self._should_mock():
+            result = self._mock_arch(goal, pinmap_text)
+        else:
+            user_msg = self._build_arch_prompt(goal, modules_hint, pinmap_text,
+                                                docs_text, vision_block)
+            messages = [{"role": "system", "content": ARCH_SYSTEM_PROMPT},
+                        {"role": "user", "content": user_msg}]
+            try:
+                content = self._post_chat(messages, budget=max(self.cfg.max_tokens, 8192))
+                result = self._parse_arch_json(content)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("架构设计失败:%s", exc)
+                result = {"summary": f"(架构设计失败:{exc})", "modules": [],
+                          "state_machine": {}, "meta": {"error": str(exc)}}
+        result.setdefault("meta", {})
+        result["meta"]["pinmap_chars"] = len(pinmap_text or "")
+        result["meta"]["vision_used"] = bool(vision_block)
+        return result
+
+    def generate_module(self, module_spec: dict, arch: dict,
+                        pinmap_text: str = "") -> dict:
+        """阶段③:为单个模块生成完整 .c/.h。返回 {summary, files[], meta}。"""
+        if self._should_mock():
+            return self._mock_module(module_spec)
+        periph = json.dumps(module_spec.get("peripherals", []), ensure_ascii=False)
+        api_txt = " ".join(module_spec.get("api", []) or [])
+        syms = self._extract_symbols_impl(
+            f"{module_spec.get('name','')} {periph} {api_txt}", limit=8)
+        lens_block, _echo = self._gather_tokenbase(syms)
+        pin_assign = json.dumps(arch.get("pin_assign", []), ensure_ascii=False)
+        user_msg = self._build_module_prompt(module_spec, pin_assign, pinmap_text, lens_block)
+        messages = [{"role": "system", "content": MODULE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg}]
+        try:
+            content = self._post_chat(messages, budget=max(self.cfg.max_tokens, 6144))
+            result = self._parse_implement_json(content)   # 复用 {summary,files[]}
+        except Exception as exc:  # noqa: BLE001
+            logger.error("模块 %s 生成失败:%s", module_spec.get("name"), exc)
+            result = {"summary": f"(失败:{exc})", "files": [], "meta": {"error": str(exc)}}
+        return result
+
+    def integrate_main(self, arch: dict, module_apis: list[dict]) -> dict:
+        """阶段④:生成 main.c + state_machine.c/.h。返回 {summary, files[], meta}。"""
+        if self._should_mock():
+            return self._mock_integrate(arch, module_apis)
+        user_msg = self._build_integrate_prompt(arch, module_apis)
+        messages = [{"role": "system", "content": INTEGRATE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg}]
+        try:
+            content = self._post_chat(messages, budget=max(self.cfg.max_tokens, 6144))
+            result = self._parse_implement_json(content)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("集成失败:%s", exc)
+            result = {"summary": f"(失败:{exc})", "files": [], "meta": {"error": str(exc)}}
+        return result
+
+    def _call_vision(self, prompt_text: str, images_data_urls: list[str]) -> str:
+        """用 vision_model 看原理图。临时换 cfg 的 model/base_url/api_key,复用 _post_chat
+        (其内置 image_url 被拒→退化纯文本 回退)。无 vision_model/无图返回 ''。"""
+        if not self.cfg.vision_model or not images_data_urls:
+            return ""
+        saved = (self.cfg.model, self.cfg.base_url, self.cfg.api_key)
+        try:
+            self.cfg.model = self.cfg.vision_model
+            if self.cfg.vision_base_url:
+                self.cfg.base_url = self.cfg.vision_base_url
+            if self.cfg.vision_api_key:
+                self.cfg.api_key = self.cfg.vision_api_key
+            content_list: object = [{"type": "text", "text": prompt_text}]
+            for u in images_data_urls:
+                content_list.append({"type": "image_url", "image_url": {"url": u}})  # type: ignore[union-attr]
+            messages = [{"role": "user", "content": content_list}]
+            return self._post_chat(messages, want_json=False)
+        finally:
+            self.cfg.model, self.cfg.base_url, self.cfg.api_key = saved
+
+    # ---------- 五阶段 prompt 构造 ----------
+    def _build_arch_prompt(self, goal: str, modules_hint: str, pinmap_text: str,
+                           docs_text: str, vision_block: str) -> str:
+        parts = ["# 产品目标", goal.strip() or "据下方引脚表与需求实现产品固件"]
+        if modules_hint.strip():
+            parts.append("\n# 模块提示(用户给定,可调整/补充)")
+            parts.append(modules_hint.strip())
+        parts.append("\n# 引脚表(用户已校验,优先遵循)")
+        parts.append(pinmap_text.strip() or "(未提供引脚表)")
+        if vision_block.strip():
+            parts.append(vision_block.strip())
+        if docs_text.strip():
+            parts.append("\n# 需求文档")
+            parts.append(docs_text.strip())
+        parts.append("\n请输出架构设计(严格 JSON:"
+                     "summary/hal_modules/pin_assign/modules/state_machine/tasks)。")
+        return "\n".join(parts)
+
+    def _build_module_prompt(self, module_spec: dict, pin_assign: str,
+                             pinmap_text: str, lens_block: str) -> str:
+        parts = ["# 模块规格(本任务只实现这一个模块)",
+                 json.dumps(module_spec, ensure_ascii=False, indent=2)]
+        parts.append("\n# 全局引脚分配(pin_assign)")
+        parts.append(pin_assign or "[]")
+        if pinmap_text.strip():
+            parts.append("\n# 引脚表(用户校验)")
+            parts.append(pinmap_text.strip())
+        if lens_block.strip():
+            parts.append("\n# 工程已有符号上下文(复用其句柄/类型)")
+            parts.append(lens_block)
+        parts.append("\n请输出该模块 files[](严格 JSON,路径与 module.files[].path 一致)。")
+        return "\n".join(parts)
+
+    def _build_integrate_prompt(self, arch: dict, module_apis: list[dict]) -> str:
+        parts = ["# 状态机定义",
+                 json.dumps(arch.get("state_machine", {}), ensure_ascii=False, indent=2)]
+        parts.append("\n# 各模块对外 API(供 main/状态机调用)")
+        parts.append(json.dumps(module_apis, ensure_ascii=False, indent=2))
+        parts.append("\n# 全局引脚分配")
+        parts.append(json.dumps(arch.get("pin_assign", []), ensure_ascii=False, indent=2))
+        parts.append("\n请输出 main.c + state_machine.c/.h(严格 JSON files[])。")
+        return "\n".join(parts)
+
+    def _parse_arch_json(self, content: str) -> dict:
+        """解析架构 JSON(容错:剥离 ```、抓首个 {...})。"""
+        text = content.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if m:
+            text = m.group(0)
+        try:
+            obj = json.loads(text)
+        except json.JSONDecodeError as exc:
+            logger.error("架构 JSON 解析失败:%s", exc)
+            return {"summary": f"(架构 JSON 解析失败:{exc})", "modules": [],
+                    "state_machine": {}, "meta": {"raw_truncated": content[:800]}}
+        return obj
+
+    # ---------- 五阶段 mock ----------
+    def _mock_arch(self, goal: str, pinmap_text: str) -> dict:
+        return {
+            "summary": "[mock] 两模块示意架构(配好 ai.api_key 后由模型生成)",
+            "hal_modules": ["gpio", "rcc", "cortex", "pwr", "dma", "i2c", "tim"],
+            "pin_assign": [
+                {"signal": "I2C1_SCL", "port": "PB6", "function": "I2C1_SCL", "module": "sht40", "note": ""},
+                {"signal": "I2C1_SDA", "port": "PB7", "function": "I2C1_SDA", "module": "sht40", "note": ""},
+                {"signal": "MOTOR_PWM", "port": "PA8", "function": "TIM1_CH1", "module": "motor", "note": ""},
+            ],
+            "modules": [
+                {"name": "sht40", "purpose": "温湿度采集", "peripherals": [{"type": "i2c", "instance": "1"}],
+                 "deps": [], "api": ["int sht40_read(float *t, float *rh);"],
+                 "files": [{"path": "Drivers/BSP/sht40.c", "role": "impl"},
+                           {"path": "Drivers/BSP/sht40.h", "role": "hdr"}]},
+                {"name": "motor", "purpose": "直流电机 PWM", "peripherals": [{"type": "tim", "instance": "1"}],
+                 "deps": [], "api": ["void motor_set(uint8_t duty);"],
+                 "files": [{"path": "Drivers/BSP/motor.c", "role": "impl"},
+                           {"path": "Drivers/BSP/motor.h", "role": "hdr"}]},
+            ],
+            "state_machine": {"initial": "IDLE", "events": ["EVT_TICK"],
+                              "states": [{"name": "IDLE", "entry": "", "exit": "",
+                                          "transitions": [{"to": "IDLE", "event": "EVT_TICK", "guard": ""}]}]},
+            "tasks": [{"module": "sht40", "order": 1}, {"module": "motor", "order": 2}],
+            "meta": {"mock": True},
+        }
+
+    def _mock_module(self, module_spec: dict) -> dict:
+        name = module_spec.get("name", "mod")
+        out_files = []
+        for f in (module_spec.get("files") or []):
+            p = (f.get("path") or "").strip()
+            if not p:
+                continue
+            if p.endswith(".h"):
+                content = (f"/* mock 占位 */\n#ifndef {name.upper()}_H\n#define {name.upper()}_H\n"
+                           f'#include "main.h"\n#endif\n')
+            else:
+                content = f'/* mock 占位:配置 ai.api_key 后由模型生成 */\n#include "{name}.h"\n'
+            out_files.append({"path": p, "content": content, "reason": "mock 占位"})
+        return {"summary": f"[mock] {name} 占位实现", "files": out_files, "meta": {"mock": True}}
+
+    def _mock_integrate(self, arch: dict, module_apis: list[dict]) -> dict:
+        return {
+            "summary": "[mock] 集成占位(配好 key 后由模型生成)",
+            "files": [
+                {"path": "Core/Src/main.c",
+                 "content": '/* mock main 占位 */\n#include "main.h"\n'
+                            'int main(void){HAL_Init();while(1){}}\n', "reason": "mock"},
+                {"path": "Core/Src/state_machine.c",
+                 "content": '/* mock fsm 占位 */\n#include "state_machine.h"\nvoid fsm_tick(void){}\n',
+                 "reason": "mock"},
+                {"path": "Core/Inc/state_machine.h",
+                 "content": "#ifndef STATE_MACHINE_H\n#define STATE_MACHINE_H\nvoid fsm_tick(void);\n#endif\n",
+                 "reason": "mock"},
+            ],
             "meta": {"mock": True},
         }
 
