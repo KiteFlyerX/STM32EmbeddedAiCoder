@@ -257,13 +257,19 @@ C_INCLUDES = \\
 AS_SOURCES = \\
 Core/Startup/{startup_name}
 
-# 工程自有源 + SDK 全部 HAL 源(wildcard:HAL Conf 模板默认启用常用模块,未启用的 .c 因 #ifdef 空编译)
+# SDK HAL 源:hal.c 单独 wildcard(hal_*.c 不匹配它),其余 hal_*.c 用 wildcard;
+# sort 去重(hal_cortex.c 会被两条规则同时命中),filter-out 剔除 *_template.c(模板编入会链接冲突)
+HAL_C_SRC  = $(wildcard $(SDK_ROOT)/Drivers/{mcu_family}_HAL_Driver/Src/{mcu_family_lower}_hal.c)
+HAL_C_SRC += $(wildcard $(SDK_ROOT)/Drivers/{mcu_family}_HAL_Driver/Src/{mcu_family_lower}_hal_*.c)
+HAL_C_SRC := $(filter-out %_template.c,$(sort $(HAL_C_SRC)))
+
+# 工程自有源 + SDK HAL 源(HAL Conf 模板默认启用常用模块,未启用的 .c 因 #ifdef 空编译)
 C_SOURCES = \\
 Core/Src/main.c \\
 Core/Src/{mcu_family_lower}_it.c \\
 Core/Src/{mcu_family_lower}_hal_msp.c \\
 Core/Src/system_{mcu_family_lower}.c \\
-$(wildcard $(SDK_ROOT)/Drivers/{mcu_family}_HAL_Driver/Src/{mcu_family_lower}_hal_*.c)
+$(HAL_C_SRC)
 
 OPT     = -Og -g3 -Wall -fdata-sections -ffunction-sections
 CFLAGS  = $(MCU) $(C_DEFS) $(C_INCLUDES) $(OPT) -std=c11
@@ -275,6 +281,9 @@ LDFLAGS  = $(MCU) -specs=nano.specs -specs=nosys.specs -T$(LDSCRIPT) $(LIBS) \\
 -Wl,-Map=$(BUILD_DIR)/$(TARGET).map,--cref -Wl,--gc-sections
 
 BUILD_DIR = build
+
+# 显式默认目标:否则 make 会把第一个具体规则(.elf)当默认,导致不出 .hex/.bin
+.DEFAULT_GOAL := all
 
 OBJECTS = $(addprefix $(BUILD_DIR)/,$(notdir $(C_SOURCES:.c=.o)))
 vpath %.c $(sort $(dir $(C_SOURCES)))
