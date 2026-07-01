@@ -51,6 +51,7 @@ class EngineHub(QObject):
     _rollbackRequested = Signal()
     _implementRequested = Signal(str)
     _implementDeployRequested = Signal(str)
+    _generateProjectRequested = Signal(str)   # F-25 一键生成整项目
     _monitorStartRequested = Signal(bool)
     _monitorStopRequested = Signal()
 
@@ -71,6 +72,7 @@ class EngineHub(QObject):
         self._rollbackRequested.connect(self.worker.do_rollback)
         self._implementRequested.connect(self.worker.do_implement)
         self._implementDeployRequested.connect(self.worker.do_implement_and_deploy)
+        self._generateProjectRequested.connect(self.worker.do_generate_project)
         self._monitorStartRequested.connect(self.worker.do_start_monitor)
         self._monitorStopRequested.connect(self.worker.do_stop_monitor)
 
@@ -126,6 +128,10 @@ class EngineHub(QObject):
     def implement_and_deploy_now(self, goal: str) -> None:
         """生成 → 自动编译(自愈)→ 烧录 一条龙(排队到 worker 线程)。"""
         self._implementDeployRequested.emit(goal)
+
+    def generate_project_now(self, goal: str) -> None:
+        """F-25 一键生成整项目(原理图+需求+SDK → 五阶段 → 可编译工程)。排队到 worker 线程。"""
+        self._generateProjectRequested.emit(goal)
 
     def start_monitor(self, demo: bool) -> None:
         """开启持续串口监听(独立于 AI 闭环)。"""

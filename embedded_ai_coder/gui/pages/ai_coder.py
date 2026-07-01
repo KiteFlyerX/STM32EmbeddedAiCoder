@@ -60,8 +60,10 @@ class AiCoderPage(PlaceholderPage):
         implRow.addWidget(self.goalEdit, 1)
         self.btnImplement = PrimaryPushButton("🤖 实现", implCard)
         self.btnDeploy = PushButton("🚀 实现并部署", implCard)
+        self.btnGenProject = PrimaryPushButton("🏗️ 一键生成整项目", implCard)
         implRow.addWidget(self.btnImplement)
         implRow.addWidget(self.btnDeploy)
+        implRow.addWidget(self.btnGenProject)
         il.addLayout(implRow)
         self.implLabel = BodyLabel("尚未实现。", implCard)
         self.implLabel.setWordWrap(True)
@@ -110,6 +112,8 @@ class AiCoderPage(PlaceholderPage):
         self.btnRollback.clicked.connect(self._on_rollback)
         self.btnImplement.clicked.connect(self._on_implement)
         self.btnDeploy.clicked.connect(self._on_deploy)
+        self.btnGenProject.clicked.connect(self._on_gen_project)
+        self.hub.progress.connect(self._on_progress)
 
     # ---------- 回调 ----------
     def _on_patches(self, patches: list, diagnosis: str, mock: bool) -> None:
@@ -165,9 +169,43 @@ class AiCoderPage(PlaceholderPage):
         InfoBar.information("已提交", "生成+部署流水线已在后台执行(生成→编译→烧录)。",
                             parent=self.window(), duration=3000)
 
+    def _on_gen_project(self) -> None:
+        goal = self.goalEdit.text().strip()
+        self.implLabel.setText("⟳ 一键生成整项目(架构→scaffold→模块→集成→编译自愈)… 全程后台,请稍候。")
+        self.btnGenProject.setEnabled(False)
+        self.hub.generate_project_now(goal)
+        InfoBar.information("已提交", "一键生成整项目已在后台执行(五阶段),进度见此处。",
+                            parent=self.window(), duration=3000)
+
+    _PROJ_STAGE_LABEL = {
+        "proj_design": "① 架构设计",
+        "proj_scaffold": "② 生成工程骨架",
+        "proj_integrate": "④ 主循环+状态机集成",
+        "proj_build_heal": "⑤ 编译自愈",
+    }
+
+    def _on_progress(self, stage: str, payload: dict) -> None:
+        """识别 proj_* 阶段进度,更新提示文案。"""
+        if not stage or not stage.startswith("proj_"):
+            return
+        if stage.startswith("proj_module_"):
+            name = stage.split("proj_module_", 1)[1]
+            self.implLabel.setText(f"⟳ ③ 生成模块:{name} …")
+            return
+        label = self._PROJ_STAGE_LABEL.get(stage, stage)
+        status = payload.get("status", "")
+        if stage == "proj_build_heal" and status == "done":
+            ok = payload.get("build_ok")
+            heal = payload.get("heal_attempts", 0)
+            self.implLabel.setText(
+                f"⟳ {label}:{'✓编译通过' if ok else '✗编译失败(自愈 ' + str(heal) + ' 轮)'}")
+        elif status:
+            self.implLabel.setText(f"⟳ {label}:{status}")
+
     def _on_implement_result(self, payload: dict) -> None:
         self.btnImplement.setEnabled(True)
         self.btnDeploy.setEnabled(True)
+        self.btnGenProject.setEnabled(True)
         err = payload.get("error")
         if err:
             self.implLabel.setText(f"❌ 实现失败:{err}")

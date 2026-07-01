@@ -248,6 +248,31 @@ class LoopWorker(QObject):
                 "mock": False, "error": f"{type(exc).__name__}: {exc}", "deploy": True,
             })
 
+    @Slot(str)
+    def do_generate_project(self, goal: str) -> None:
+        """F-25 一键生成整项目(五阶段:设计→scaffold→逐模块→集成→编译自愈,worker 线程)。"""
+        config = dict(self._config_getter())
+        try:
+            from ..core.implement_orchestrator import make_project_orchestrator
+            orch = make_project_orchestrator(
+                config, on_step=lambda s, p: self.progress.emit(s, p))
+            proj = config.get("project", {}) or {}
+            out = orch.implement_project(
+                goal=goal or "", chip=proj.get("chip", ""),
+                project_root=proj.get("root", ""), sdk_root=proj.get("sdk_path", ""))
+            files = [{"path": f, "chars": 0, "reason": ""} for f in (out.get("files") or [])]
+            self._emit_impl_result(
+                {"summary": out.get("summary", ""), "meta": {"mock": out.get("mock", False)}},
+                files, len(files), 0,
+                deploy=True, build_ok=out.get("build_ok"),
+                flashed=None, note=out.get("note", ""))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("一键生成整项目失败")
+            self.implementResult.emit({
+                "summary": "", "files": [], "written": 0, "skipped": 0,
+                "mock": False, "error": f"{type(exc).__name__}: {exc}", "deploy": True,
+            })
+
     def _emit_impl_result(self, out: dict, files: list, written: int, skipped: int,
                           *, deploy: bool, build_ok=None, flashed=None, note="") -> None:
         meta = out.get("meta", {}) or {}

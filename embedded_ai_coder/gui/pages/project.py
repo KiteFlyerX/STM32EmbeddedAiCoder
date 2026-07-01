@@ -74,6 +74,16 @@ class ProjectPage(PlaceholderPage):
         self.chipEdit.setPlaceholderText("如 STM32H743 / STM32F407")
         cl.addWidget(self.chipEdit)
 
+        cl.addWidget(BodyLabel("官方 SDK 包根(一键生成 scaffold 用):", cfgCard))
+        sdkRow = QHBoxLayout()
+        self.sdkEdit = LineEdit(cfgCard)
+        self.sdkEdit.setText(proj.get("sdk_path", "") or "")
+        self.sdkEdit.setPlaceholderText("如 E:/AiTool/STM32_SDK/STM32Cube_FW_G0_V1.6.0")
+        self.btnBrowseSdk = PushButton("浏览…", cfgCard)
+        sdkRow.addWidget(self.sdkEdit, 1)
+        sdkRow.addWidget(self.btnBrowseSdk)
+        cl.addLayout(sdkRow)
+
         cl.addWidget(BodyLabel("构建命令:", cfgCard))
         self.buildEdit = LineEdit(cfgCard)
         self.buildEdit.setText(proj.get("build_command", "") or "")
@@ -102,6 +112,7 @@ class ProjectPage(PlaceholderPage):
 
         # 绑定
         self.btnBrowse.clicked.connect(self._on_browse)
+        self.btnBrowseSdk.clicked.connect(self._on_browse_sdk)
         self.btnSave.clicked.connect(self._on_save)
         self.btnRefresh.clicked.connect(self._refresh_tree)
         # 初次填充源码树
@@ -151,6 +162,22 @@ class ProjectPage(PlaceholderPage):
         reqRow.addWidget(self.btnClrReq)
         cl.addLayout(reqRow)
 
+        # 引脚表(F-25 一键生成主路径 + 视觉兜底)
+        cl.addWidget(BodyLabel("引脚表(结构化 .md,一键生成用):", card))
+        pinRow = QHBoxLayout()
+        self.pinmapEdit = LineEdit(card)
+        self.pinmapEdit.setReadOnly(True)
+        self.pinmapEdit.setPlaceholderText("点击「选择…」选引脚表文件(主路径,优先于视觉)")
+        self._pinmap_path = docs_cfg.get("pinmap", "") or ""
+        if self._pinmap_path:
+            self.pinmapEdit.setText(self._pinmap_path.replace("\\", "/"))
+        self.btnPinmap = PushButton("选择…", card)
+        self.btnClrPinmap = PushButton("清空", card)
+        pinRow.addWidget(self.pinmapEdit, 1)
+        pinRow.addWidget(self.btnPinmap)
+        pinRow.addWidget(self.btnClrPinmap)
+        cl.addLayout(pinRow)
+
         # 预读 + 预览
         opRow = QHBoxLayout()
         self.btnPreread = PushButton("📖 预读文档", card)
@@ -168,6 +195,8 @@ class ProjectPage(PlaceholderPage):
         self.btnClrSch.clicked.connect(lambda: self._clear_files("schematic"))
         self.btnAddReq.clicked.connect(lambda: self._add_files("requirement"))
         self.btnClrReq.clicked.connect(lambda: self._clear_files("requirement"))
+        self.btnPinmap.clicked.connect(self._on_pick_pinmap)
+        self.btnClrPinmap.clicked.connect(self._on_clear_pinmap)
         self.btnPreread.clicked.connect(self._on_preread)
         return card
 
@@ -246,16 +275,37 @@ class ProjectPage(PlaceholderPage):
             self.rootEdit.setText(path.replace("\\", "/"))
             self._refresh_tree()
 
+    def _on_browse_sdk(self) -> None:
+        start = self.sdkEdit.text().strip() or ""
+        path = QFileDialog.getExistingDirectory(self, "选择官方 SDK 包根目录", start)
+        if path:
+            self.sdkEdit.setText(path.replace("\\", "/"))
+
+    def _on_pick_pinmap(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择引脚表", "", "引脚表 (*.md *.txt);;所有文件 (*)")
+        if path:
+            self._pinmap_path = path.replace("\\", "/")
+            self.pinmapEdit.setText(self._pinmap_path)
+
+    def _on_clear_pinmap(self) -> None:
+        self._pinmap_path = ""
+        self.pinmapEdit.setText("")
+
     def _on_save(self) -> None:
         root = self.rootEdit.text().strip()
         chip = self.chipEdit.text().strip()
         build_cmd = self.buildEdit.text().strip()
+        sdk_path = self.sdkEdit.text().strip()
+        pinmap = (self._pinmap_path or "").strip()
         overlay = {
-            "project": {"root": root, "chip": chip, "build_command": build_cmd},
+            "project": {"root": root, "chip": chip,
+                        "build_command": build_cmd, "sdk_path": sdk_path},
             "ai": {"tokenbase_dir": root} if root else {},
             "docs": {
                 "schematics": list(self._sch_paths),
                 "requirements": list(self._req_paths),
+                "pinmap": pinmap,
             },
         }
         try:
@@ -265,13 +315,15 @@ class ProjectPage(PlaceholderPage):
             return
         # 同步到内存 config(深合并)
         merged_proj = dict(self.hub.config.get("project", {}) or {})
-        merged_proj.update({"root": root, "chip": chip, "build_command": build_cmd})
+        merged_proj.update({"root": root, "chip": chip,
+                            "build_command": build_cmd, "sdk_path": sdk_path})
         self.hub.config["project"] = merged_proj
         if root:
             self.hub.config.setdefault("ai", {})["tokenbase_dir"] = root
         merged_docs = dict(self.hub.config.get("docs", {}) or {})
         merged_docs["schematics"] = list(self._sch_paths)
         merged_docs["requirements"] = list(self._req_paths)
+        merged_docs["pinmap"] = pinmap
         self.hub.config["docs"] = merged_docs
         InfoBar.success("已保存", "工程配置与项目文档已写入 local.yaml。",
                         parent=self.window(), duration=3000)
