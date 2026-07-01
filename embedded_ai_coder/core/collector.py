@@ -169,10 +169,22 @@ class SerialCollector(LogCollector):
                 pass
 
     # ---------- 对外迭代 ----------
-    def iter_lines(self) -> Iterator[str]:
+    def iter_lines(
+        self,
+        idle_timeout: Optional[float] = None,
+        max_lines: Optional[int] = None,
+    ) -> Iterator[str]:
         """阻塞式逐行产出日志;收到 None 哨兵则结束。
 
         文件回放模式下,若上一轮已到 EOF,本轮自动从头重新回放(多轮闭环可用)。
+
+        参数:
+        - idle_timeout:空闲超时(秒)。连续这么久未产出新行即主动结束本次迭代,
+          把控制权交回调用方。**关键**:真实串口下若设备静默不发数据,
+          本生成器内部会每 0.5s 在 queue.get 上空转而永不 yield,导致调用方
+          (如 orchestrator._collect)的 for 循环体(含超时检查)永远没机会执行、
+          整个闭环卡死。设了 idle_timeout 即可破此死锁。None=不超时(旧行为)。
+        - max_lines:产出这么多行后结束。None=不限。
         """
         if self.from_file is not None and self._replay_consumed:
             # 重置:清队列 + 重启回放线程
@@ -187,16 +199,30 @@ class SerialCollector(LogCollector):
                 target=self._replay_file, name="serial-collector", daemon=True
             )
             self._thread.start()
+        idle_deadline: Optional[float] = None  # 距“上次产出新行”的截止时刻
+        produced = 0
         while True:
             if self._stop_event.is_set():
                 return
             try:
                 item = self._queue.get(timeout=0.5)
             except queue.Empty:
+                # 设备静默:按 idle_timeout 主动收尾,避免调用方永久阻塞
+                if idle_timeout is not None:
+                    now = time.monotonic()
+                    if idle_deadline is None:
+                        idle_deadline = now + idle_timeout
+                    if now >= idle_deadline:
+                        return
                 continue
+            # 取到任何东西(含哨兵)都视为“有动静”,重置空闲计时
+            idle_deadline = None
             if item is None:  # 哨兵
                 return
+            produced += 1
             yield item
+            if max_lines is not None and produced >= max_lines:
+                return
 
     # ---------- 辅助 ----------
     def enable_log_to_file(self, path: str | Path) -> None:

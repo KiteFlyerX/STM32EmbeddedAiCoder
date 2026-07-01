@@ -74,6 +74,7 @@ class OrchestratorImpl(Orchestrator):
         build_heal_retries: int = 2,
         confirm_fn: Optional[Callable[[str], bool]] = None,
         collect_lines_per_iter: int = 200,
+        collect_idle_timeout: float = 5.0,
         on_step: Optional[Callable[[str, dict], None]] = None,
         pause_event: Optional[threading.Event] = None,
     ):
@@ -91,6 +92,9 @@ class OrchestratorImpl(Orchestrator):
         # confirm_fn(message)->bool;默认 input() 交互(M1 CLI 用)
         self.confirm_fn = confirm_fn or self._default_confirm
         self.collect_lines_per_iter = collect_lines_per_iter
+        # 设备静默(不发任何串口数据)时,单轮采集最多等这么久就收尾;
+        # 防止 _collect 永久阻塞、闭环第一轮卡死“跑不起来”
+        self.collect_idle_timeout = collect_idle_timeout
         # on_step(stage, payload):每步回调,CLI 打印 / GUI 上报都用它
         self.on_step = on_step or (lambda stage, payload: None)
         # pause_event:set=运行,clear=暂停(GUI 用);None(CLI)=永不暂停
@@ -327,16 +331,12 @@ class OrchestratorImpl(Orchestrator):
 
     # ---------- 采集 ----------
     def _collect(self) -> list[str]:
-        """采一轮日志(最多 collect_lines_per_iter 行,或采集到哨兵/超时)。"""
-        lines: list[str] = []
-        deadline = time.monotonic() + 5.0
-        for ln in self.collector.iter_lines():
-            lines.append(ln)
-            if len(lines) >= self.collect_lines_per_iter:
-                break
-            if time.monotonic() > deadline:
-                break
-        return lines
+        """采一轮日志:最多 collect_lines_per_iter 行;或设备静默
+        collect_idle_timeout 秒无数据即止(关键:避免串口无输出时永久阻塞)。"""
+        return list(self.collector.iter_lines(
+            idle_timeout=self.collect_idle_timeout,
+            max_lines=self.collect_lines_per_iter,
+        ))
 
     # ---------- 辅助 ----------
     def _emit(self, stage: str, payload: dict) -> None:
@@ -390,6 +390,7 @@ def make_orchestrator(config: dict, *, dry_run: bool = False,
         auto_flash=bool(loop.get("auto_flash", False)),
         auto_build=bool(loop.get("auto_build", True)),
         build_heal_retries=int(loop.get("build_heal_retries", 2)),
+        collect_idle_timeout=float(loop.get("collect_idle_timeout", 5.0)),
         confirm_fn=confirm_fn, on_step=on_step,
         pause_event=pause_event,
     )
